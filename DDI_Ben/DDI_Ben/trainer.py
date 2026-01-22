@@ -13,6 +13,7 @@ from pprint import pprint
 from data_process import *
 
 import csv
+import wandb
 
 num_ent = {'drugbank': 1710, 'twosides': 645, 'HetioNet': 34124}
 num_rel = {'drugbank': 86, 'twosides': 209} # 209, 309, 188
@@ -136,6 +137,9 @@ class Trainer():
                 print(time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' [E:{}| {}]: Train Loss:{:.5}\t{}'.format(epoch, step, np.mean(losses), self.args.name))
 
         loss = np.mean(losses)
+        
+        # Log training loss to wandb
+        wandb.log({"train/loss": loss, "epoch": epoch})
 
         return loss
 
@@ -196,6 +200,14 @@ class Trainer():
                 results['f1'] = f1
                 results['kappa'] = kappa
                 str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: F1-score : {:.5}, Accuracy : {:.5}, Kappa : {:.5}\n'.format(split ,epoch, split, results['f1'], results['accuracy'], results['kappa'])
+                
+                # Log drugbank metrics to wandb
+                wandb.log({
+                    f"{split}/f1": results['f1'],
+                    f"{split}/accuracy": results['accuracy'],
+                    f"{split}/kappa": results['kappa'],
+                    "epoch": epoch
+                })
 
             elif self.args.dataset == 'twosides':
                 pred_final = np.concatenate(pred_list)
@@ -214,6 +226,14 @@ class Trainer():
                 results['AUC-ROC'] = np.array(roc_auc).mean()
                 results['accuracy'] = np.array(ap).mean()
                 str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: PR-AUC : {:.5},  AUC-ROC: {:.5}, Accuracy : {:.5}\n'.format(split ,epoch, split, results['PR-AUC'], results['AUC-ROC'], results['accuracy'])
+                
+                # Log twosides metrics to wandb
+                wandb.log({
+                    f"{split}/pr_auc": results['PR-AUC'],
+                    f"{split}/auc_roc": results['AUC-ROC'],
+                    f"{split}/accuracy": results['accuracy'],
+                    "epoch": epoch
+                })
 
         return results, str_record
 

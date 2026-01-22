@@ -5,6 +5,7 @@ from trainer import Trainer
 from utils import *
 import torch
 import numpy as np
+import wandb
 
 print('pid:', os.getpid())
 
@@ -67,10 +68,20 @@ def main():
         args.adversarial = 0
 
     args.device = "cuda:"+ str(args.gpu) if torch.cuda.is_available() else "cpu"
+    wandb.login()
+    wandb.init(
+        entity="tunglamngo-univesity-of-engineering-and-technology-vnu",
+        project="DDI_NCKH_2025",
+        name=args.name,
+        config=vars(args)
+    )
 
     ### Training step in the trainer
     trainer = Trainer(args)
     trainer.run()
+    
+    ### Close wandb
+    wandb.finish()
 
 if __name__ == "__main__":
     main()
