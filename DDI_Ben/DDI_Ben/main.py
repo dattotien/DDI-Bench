@@ -74,7 +74,12 @@ def main():
         wandb.login(key=my_secret)
     except:
         wandb.login(key="c4816b32f37419d7d62dc261260293cdfb9d7190")
-
+    wandb.init(
+        entity="tunglamngo-univesity-of-engineering-and-technology-vnu",
+        project="DDI_NCKH_2025",
+        name=args.name,
+        config=vars(args)
+    )
     ### Training step in the trainer
     trainer = Trainer(args)
     trainer.run()
