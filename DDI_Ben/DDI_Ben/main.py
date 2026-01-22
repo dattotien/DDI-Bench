@@ -11,6 +11,10 @@ print('pid:', os.getpid())
 
 def main():
     ### set process name
+    import warnings
+    warnings.filterwarnings('ignore', category=DeprecationWarning)
+    warnings.filterwarnings('ignore', category=UserWarning)
+    
     setproctitle.setproctitle('BNbench')
 
     ### set hyperparameters
