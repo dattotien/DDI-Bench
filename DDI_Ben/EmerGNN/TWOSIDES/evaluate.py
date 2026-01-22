@@ -10,7 +10,10 @@ from hyperopt import fmin, tpe, hp, STATUS_OK, Trials, partial
 import time
 import wandb
 
-os.environ["WANDB_MODE"] = "disabled"
+try:
+    from kaggle_secrets import UserSecretsClient
+except ImportError:
+    UserSecretsClient = None
 
 parser = argparse.ArgumentParser(description="Parser for EmerGNN")
 parser.add_argument('--task_dir', type=str, default='./', help='the directory to dataset')
@@ -36,6 +39,22 @@ class options:
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    try:
+        if UserSecretsClient is not None:
+            user_secrets = UserSecretsClient()
+            api_key = user_secrets.get_secret("wandb_key")
+            if api_key:
+                wandb.login(key=api_key)
+            else:
+                wandb.login(key="c4816b32f37419d7d62dc261260293cdfb9d7190")
+        else:
+            env_key = os.environ.get("WANDB_API_KEY")
+            if env_key:
+                wandb.login(key=env_key)
+            else:
+                wandb.login(key="c4816b32f37419d7d62dc261260293cdfb9d7190")
+    except Exception:
+        wandb.login(key="c4816b32f37419d7d62dc261260293cdfb9d7190")
     torch.cuda.set_device(args.gpu)
     dataloader = DataLoader(args)
     if args.adversarial:
@@ -94,7 +113,13 @@ if __name__ == '__main__':
             args.length = 3
             args.feat = 'E'
         
-        wandb.init(project='EmerGNN_TWOSIDES', config=vars(args))
+        run_name = f"{args.dataset}_seed{seed}"
+        wandb.init(
+            entity="tunglamngo-univesity-of-engineering-and-technology-vnu",
+            project='DDI_NCKH_2025',
+            name=run_name,
+            config=vars(args)
+        )
         model = BaseModel(eval_ent, eval_rel, args)
         best_acc = -1
         for e in range(args.n_epoch):
@@ -108,6 +133,15 @@ if __name__ == '__main__':
             if (e+1) % args.epoch_per_test == 0:
                 v_roc, v_pr, v_ap = model.evaluate(valid_pos, valid_neg, vKG)
                 t_roc, t_pr, t_ap = model.evaluate(test_pos,  test_neg,  tKG)
+                wandb.log({
+                    "epoch": e + 1,
+                    "valid/roc_auc": v_roc,
+                    "valid/pr_auc": v_pr,
+                    "valid/ap": v_ap,
+                    "test/roc_auc": t_roc,
+                    "test/pr_auc": t_pr,
+                    "test/ap": t_ap,
+                })
                 time_now = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
                 out_str = time_now + ' :epoch:%d\tfeat:%s lr:%.6f lamb:%.8f n_batch:%d n_dim:%d layer:%d\t[Valid] ROC-AUC:%.4f PR-AUC:%.4f AP:%.4f\t [Test] ROC-AUC:%.4f PR-AUC:%.4f AP:%.4f' % (e+1, args.feat, args.lr, args.lamb, args.n_batch, args.n_dim, args.length, v_roc, v_pr, v_ap, t_roc, t_pr, t_ap)
                 if v_pr > best_acc:
