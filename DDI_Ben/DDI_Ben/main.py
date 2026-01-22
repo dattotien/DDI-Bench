@@ -73,7 +73,7 @@ def main():
         my_secret = user_secrets.get_secret("wandb_key") 
         wandb.login(key=my_secret)
     except:
-        wandb.login()
+        wandb.login("c4816b32f37419d7d62dc261260293cdfb9d7190")
 
     ### Training step in the trainer
     trainer = Trainer(args)
