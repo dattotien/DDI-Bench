@@ -169,6 +169,7 @@ class Trainer():
 
             label_list = []
             pred_list = []
+            losses = []
 
             for step, batch in enumerate(train_iter):
                 data, label	= read_batch(batch, split, self.device, self.args, self.data_record) 
@@ -176,6 +177,11 @@ class Trainer():
                     pred, _ = self.model.forward(data)
                 else:
                     pred = self.model.forward(data)
+                
+                # Calculate loss
+                loss = self.model.loss(pred if not self.args.eval_skip else pred[:,:num_rel[self.args.dataset]], label)
+                losses.append(loss.item())
+                
                 if self.args.eval_skip:
                     pred = pred[:,:num_rel[self.args.dataset]]
                 if self.args.dataset == 'drugbank':
@@ -199,10 +205,12 @@ class Trainer():
                 results['accuracy'] = accuracy
                 results['f1'] = f1
                 results['kappa'] = kappa
-                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: F1-score : {:.5}, Accuracy : {:.5}, Kappa : {:.5}\n'.format(split ,epoch, split, results['f1'], results['accuracy'], results['kappa'])
+                results['loss'] = np.mean(losses)
+                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: Loss: {:.5}, F1-score : {:.5}, Accuracy : {:.5}, Kappa : {:.5}\n'.format(split ,epoch, split, results['loss'], results['f1'], results['accuracy'], results['kappa'])
                 
                 # Log drugbank metrics to wandb
                 wandb.log({
+                    f"{split}/loss": results['loss'],
                     f"{split}/f1": results['f1'],
                     f"{split}/accuracy": results['accuracy'],
                     f"{split}/kappa": results['kappa'],
@@ -225,10 +233,12 @@ class Trainer():
                 results['PR-AUC'] = np.array(prc_auc).mean()
                 results['AUC-ROC'] = np.array(roc_auc).mean()
                 results['accuracy'] = np.array(ap).mean()
-                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: PR-AUC : {:.5},  AUC-ROC: {:.5}, Accuracy : {:.5}\n'.format(split ,epoch, split, results['PR-AUC'], results['AUC-ROC'], results['accuracy'])
+                results['loss'] = np.mean(losses)
+                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: Loss: {:.5}, PR-AUC : {:.5},  AUC-ROC: {:.5}, Accuracy : {:.5}\n'.format(split ,epoch, split, results['loss'], results['PR-AUC'], results['AUC-ROC'], results['accuracy'])
                 
                 # Log twosides metrics to wandb
                 wandb.log({
+                    f"{split}/loss": results['loss'],
                     f"{split}/pr_auc": results['PR-AUC'],
                     f"{split}/auc_roc": results['AUC-ROC'],
                     f"{split}/accuracy": results['accuracy'],
