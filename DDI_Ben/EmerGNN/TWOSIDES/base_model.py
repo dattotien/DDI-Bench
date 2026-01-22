@@ -60,6 +60,7 @@ class BaseModel(object):
             neg_head1, neg_tail1, neg_label1 = neg_head1[perm], neg_tail1[perm], neg_label1[perm]
 
             self.model.train()
+            train_losses = []
             for p_h, p_t, p_r, n_h, n_t, n_r, p_h1, p_t1, p_r1, n_h1, n_t1, n_r1 in tqdm(batch_by_size(n_batch, pos_head, pos_tail, pos_label, neg_head, neg_tail, neg_label, 
                     pos_head1, pos_tail1, pos_label1, neg_head1, neg_tail1, neg_label1, n_sample=n_train), 
                     ncols=100, leave=False, total=len(pos_head)//n_batch+int(len(pos_head)%n_batch>0)):
@@ -84,13 +85,13 @@ class BaseModel(object):
                 labels = torch.cat([torch.ones(len(p_scores)), torch.zeros(len(n_scores))], dim=0).cuda()
                 loss = self.bce_loss(scores, labels)
                 ad_loss = loss_func.CDAN([final_layer_comb, scores_comb], self.model.ad_net, None, None, self.model.random_layer)*self.args.adversarial_weight
-                print(f" | Classification Loss: {loss.item()} | Adversarial Loss: {ad_loss.item()} | Total loss: {loss.item() + ad_loss.item()}")
-                wandb.log({"train_loss": loss.item()})
-                wandb.log({"train_ad_loss": ad_loss.item()})
-                loss += ad_loss
-                loss.backward()
+                total_loss = loss + ad_loss
+                train_losses.append(total_loss.item())
+                total_loss.backward()
                 self.optimizer.step()
                 self.optimizer_ad.step()
+            
+            return np.mean(train_losses)
         else:
             pos_head, pos_tail, pos_label = torch.LongTensor(train_pos[:,0]).cuda(), torch.LongTensor(train_pos[:,1]).cuda(), torch.FloatTensor(train_pos[:,2:]).cuda()
             neg_head, neg_tail, neg_label = torch.LongTensor(train_neg[:,0]).cuda(), torch.LongTensor(train_neg[:,1]).cuda(), torch.FloatTensor(train_neg[:,2:]).cuda()
@@ -98,6 +99,7 @@ class BaseModel(object):
             n_batch = self.args.n_batch
 
             self.model.train()
+            train_losses = []
             for p_h, p_t, p_r, n_h, n_t, n_r in tqdm(batch_by_size(n_batch, pos_head, pos_tail, pos_label, neg_head, neg_tail, neg_label, n_sample=n_train), 
                     ncols=100, leave=False, total=len(pos_head)//n_batch+int(len(pos_head)%n_batch>0)):
                 self.model.zero_grad()
@@ -109,9 +111,12 @@ class BaseModel(object):
                 n_scores = n_scores[n_r>0]
                 scores = torch.cat([p_scores, n_scores], dim=0)
                 labels = torch.cat([torch.ones(len(p_scores)), torch.zeros(len(n_scores))], dim=0).cuda()
-                loss = self.bce_loss(scores, labels) 
+                loss = self.bce_loss(scores, labels)
+                train_losses.append(loss.item())
                 loss.backward()
                 self.optimizer.step()
+            
+            return np.mean(train_losses)
 
     def evaluate(self, test_pos, test_neg, KG):
         pos_head, pos_tail, pos_label = test_pos[:,0], test_pos[:,1], test_pos[:,2:]
@@ -123,18 +128,32 @@ class BaseModel(object):
         pos_scores = []
         neg_scores = []
         pred_class = {}
+        val_losses = []
         for i in range(num_batch):
             start = i * batch_size
             end = min((i+1)*batch_size, len(pos_head))
             p_h= pos_head[start:end]
             p_t= pos_tail[start:end]
+            p_r= pos_label[start:end]
             p_scores = self.model.enc_r(self.model.enc_ht(p_h, p_t, KG))
             p_scores = torch.sigmoid(p_scores)
 
             n_h= neg_head[start:end]
             n_t= neg_tail[start:end]
+            n_r= neg_label[start:end]
             n_scores = self.model.enc_r(self.model.enc_ht(n_h, n_t, KG))
             n_scores = torch.sigmoid(n_scores)
+            
+            # Calculate validation loss
+            p_r_float = torch.FloatTensor(p_r).cuda()
+            n_r_float = torch.FloatTensor(n_r).cuda()
+            p_scores_loss = p_scores[p_r_float>0]
+            n_scores_loss = n_scores[n_r_float>0]
+            scores_batch = torch.cat([p_scores_loss, n_scores_loss], dim=0)
+            labels_batch = torch.cat([torch.ones(len(p_scores_loss)), torch.zeros(len(n_scores_loss))], dim=0).cuda()
+            val_loss = self.bce_loss(scores_batch, labels_batch)
+            val_losses.append(val_loss.item())
+            
             pos_scores.append(p_scores.cpu().data.numpy())
             neg_scores.append(n_scores.cpu().data.numpy())
 
@@ -161,7 +180,7 @@ class BaseModel(object):
             k = int(len(label)//2)
             apk = np.sum(sort_label[:k,1])
             ap.append(apk/k)
-        return np.mean(roc_auc), np.mean(prc_auc), np.mean(ap)
+        return np.mean(roc_auc), np.mean(prc_auc), np.mean(ap), np.mean(val_losses)
 
     def test_single(self, triplet, KG):
         heads = triplet[0].unsqueeze(0)

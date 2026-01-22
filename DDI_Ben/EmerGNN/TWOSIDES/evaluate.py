@@ -127,23 +127,29 @@ if __name__ == '__main__':
             KG = dataloader.KG
             train_pos, train_neg = dataloader.train_pos, dataloader.train_neg
             if args.adversarial:
-                model.train(train_pos, train_neg, train_pos1, train_neg1, KG)
+                train_loss = model.train(train_pos, train_neg, train_pos1, train_neg1, KG)
             else:
-                model.train(train_pos, train_neg, None, None, KG)
+                train_loss = model.train(train_pos, train_neg, None, None, KG)
+            
+            # Log training loss
+            wandb.log({"train/loss": train_loss, "epoch": e + 1})
+            
             if (e+1) % args.epoch_per_test == 0:
-                v_roc, v_pr, v_ap = model.evaluate(valid_pos, valid_neg, vKG)
-                t_roc, t_pr, t_ap = model.evaluate(test_pos,  test_neg,  tKG)
+                v_roc, v_pr, v_ap, v_loss = model.evaluate(valid_pos, valid_neg, vKG)
+                t_roc, t_pr, t_ap, t_loss = model.evaluate(test_pos,  test_neg,  tKG)
                 wandb.log({
                     "epoch": e + 1,
+                    "valid/loss": v_loss,
                     "valid/roc_auc": v_roc,
                     "valid/pr_auc": v_pr,
                     "valid/ap": v_ap,
+                    "test/loss": t_loss,
                     "test/roc_auc": t_roc,
                     "test/pr_auc": t_pr,
                     "test/ap": t_ap,
                 })
                 time_now = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-                out_str = time_now + ' :epoch:%d\tfeat:%s lr:%.6f lamb:%.8f n_batch:%d n_dim:%d layer:%d\t[Valid] ROC-AUC:%.4f PR-AUC:%.4f AP:%.4f\t [Test] ROC-AUC:%.4f PR-AUC:%.4f AP:%.4f' % (e+1, args.feat, args.lr, args.lamb, args.n_batch, args.n_dim, args.length, v_roc, v_pr, v_ap, t_roc, t_pr, t_ap)
+                out_str = time_now + ' :epoch:%d\tfeat:%s lr:%.6f lamb:%.8f n_batch:%d n_dim:%d layer:%d\t[Train] Loss:%.4f\t[Valid] Loss:%.4f ROC-AUC:%.4f PR-AUC:%.4f AP:%.4f\t[Test] Loss:%.4f ROC-AUC:%.4f PR-AUC:%.4f AP:%.4f' % (e+1, args.feat, args.lr, args.lamb, args.n_batch, args.n_dim, args.length, train_loss, v_loss, v_roc, v_pr, v_ap, t_loss, t_roc, t_pr, t_ap)
                 if v_pr > best_acc:
                     best_acc = v_pr
                     best_str = out_str
