@@ -260,7 +260,7 @@ class Trainer():
 
     def load_model(self, load_path):
         # print(torch.cuda.device_count())
-        state = torch.load(load_path, map_location='cpu')
+        state = torch.load(load_path, map_location='cpu', weights_only=False)
         state_dict		= state['state_dict']
         self.model.load_state_dict(state_dict)
         self.optimizer.load_state_dict(state['optimizer'])
