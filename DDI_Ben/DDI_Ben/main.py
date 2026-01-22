@@ -5,8 +5,8 @@ from trainer import Trainer
 from utils import *
 import torch
 import numpy as np
+from kaggle_secrets import UserSecretsClient
 import wandb
-
 print('pid:', os.getpid())
 
 def main():
@@ -68,13 +68,12 @@ def main():
         args.adversarial = 0
 
     args.device = "cuda:"+ str(args.gpu) if torch.cuda.is_available() else "cpu"
-    wandb.login()
-    wandb.init(
-        entity="tunglamngo-univesity-of-engineering-and-technology-vnu",
-        project="DDI_NCKH_2025",
-        name=args.name,
-        config=vars(args)
-    )
+    try:
+        user_secrets = UserSecretsClient()
+        my_secret = user_secrets.get_secret("wandb_key") 
+        wandb.login(key=my_secret)
+    except:
+        wandb.login()
 
     ### Training step in the trainer
     trainer = Trainer(args)
