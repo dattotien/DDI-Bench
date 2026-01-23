@@ -145,8 +145,8 @@ class BaseModel(object):
             n_scores = torch.sigmoid(n_scores)
             
             # Calculate validation loss
-            p_r_float = torch.FloatTensor(p_r).cuda()
-            n_r_float = torch.FloatTensor(n_r).cuda()
+            p_r_float = p_r.float()
+            n_r_float = n_r.float()
             p_scores_loss = p_scores[p_r_float>0]
             n_scores_loss = n_scores[n_r_float>0]
             scores_batch = torch.cat([p_scores_loss, n_scores_loss], dim=0)
