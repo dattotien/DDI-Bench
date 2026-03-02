@@ -117,6 +117,18 @@ if __name__ == '__main__':
                 if args.adversarial:
                     model.scheduler_ad.step(v_f1)
                 time_now = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+                
+                # Log metrics to wandb
+                wandb.log({
+                    "epoch": e + 1,
+                    "valid/f1": v_f1,
+                    "valid/accuracy": v_acc,
+                    "valid/kappa": v_kap,
+                    "test/f1": t_f1,
+                    "test/accuracy": t_acc,
+                    "test/kappa": t_kap,
+                })
+                
                 out_str = time_now + ' :epoch:%d\tfeat:%s lr:%.6f lamb:%.8f n_batch:%d n_dim:%d layer:%d\t[Valid] f1:%.4f acc:%.4f kap:%.4f\t[Test] f1:%.4f acc:%.4f kap:%.4f' % (e+1, args.feat, args.lr, args.lamb, args.n_batch, args.n_dim, args.length, v_f1, v_acc, v_kap, t_f1, t_acc, t_kap)
                 out_str_class = f'[Test per class]: {t_per_class} \n'
                 if v_f1 > best_acc:

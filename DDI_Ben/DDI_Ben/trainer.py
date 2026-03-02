@@ -218,18 +218,31 @@ class Trainer():
                     label_cun.append(label_final[where_is,j]*label_final[where_is,-1])
                 roc_auc = [ roc_auc_score(label_cun[l], pred_cun[l]) if label_cun[l].shape[0] > 0 else 0 for l in range(pred_final.shape[1])]
                 prc_auc = [ average_precision_score(label_cun[l], pred_cun[l]) if label_cun[l].shape[0] > 0 else 0 for l in range(pred_final.shape[1])]
-                ap =  [accuracy_score(label_cun[l], (pred_cun[l] > 0.5).astype('float')) if label_cun[l].shape[0] > 0 else 0 for l in range(pred_final.shape[1])]
+                
+                # Calculate AP@K
+                apk_list = []
+                for j in range(pred_final.shape[1]):
+                    where_is = np.where(label_final[:,j]==1)[0]
+                    if len(where_is) > 0:
+                        score = pred_cun[j]
+                        label = label_cun[j]
+                        sort_label = np.array(sorted(zip(score, label), reverse=True))
+                        k = int(len(label)//2)
+                        apk = np.sum(sort_label[:k,1])
+                        apk_list.append(apk/k if k > 0 else 0)
+                    else:
+                        apk_list.append(0)
 
                 results['PR-AUC'] = np.array(prc_auc).mean()
                 results['AUC-ROC'] = np.array(roc_auc).mean()
-                results['accuracy'] = np.array(ap).mean()
+                results['AP@K'] = np.array(apk_list).mean()
                 results['loss'] = np.mean(losses)
-                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: Loss: {:.5}, PR-AUC : {:.5},  AUC-ROC: {:.5}, Accuracy : {:.5}\n'.format(split ,epoch, split, results['loss'], results['PR-AUC'], results['AUC-ROC'], results['accuracy'])
+                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: Loss: {:.5}, PR-AUC : {:.5},  AUC-ROC: {:.5}, AP@K : {:.5}\n'.format(split ,epoch, split, results['loss'], results['PR-AUC'], results['AUC-ROC'], results['AP@K'])
                 wandb.log({
                     f"{split}/pr_auc": results['PR-AUC'],
                     f"{split}/loss": results['loss'],
                     f"{split}/auc_roc": results['AUC-ROC'],
-                    f"{split}/accuracy": results['accuracy'],
+                    f"{split}/apk": results['AP@K'],
                     "epoch": epoch
                 })
         return results, str_record
