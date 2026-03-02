@@ -173,8 +173,6 @@ class Trainer():
                     pred, _ = self.model.forward(data)
                 else:
                     pred = self.model.forward(data)
-                    loss = self.model.loss(pred if not self.args.eval_skip else pred[:,:num_rel[self.args.dataset]], label)
-                    losses.append(loss.item())
                 if self.args.eval_skip:
                     pred = pred[:,:num_rel[self.args.dataset]]
                 if self.args.dataset == 'drugbank':
