@@ -12,6 +12,7 @@ import sys
 import torch
 
 import random
+import warnings
 
 import fcntl
 import pandas
@@ -24,8 +25,13 @@ from torch.utils.data import Dataset
 import torch.optim as optim
 
 from rdkit import Chem
+from rdkit import RDLogger
 import networkx as nx
 from torch_geometric.utils import subgraph, degree, get_laplacian
+
+# Suppress RDKit warnings and deprecation warnings
+RDLogger.DisableLog('rdApp.*')
+warnings.filterwarnings('ignore', category=DeprecationWarning, module='rdkit')
 
 
 def load_data(args):
@@ -208,7 +214,7 @@ def atom_features(atom):
                                            'Ti', 'Zn', 'H', 'Li', 'Ge', 'Cu', 'Au', 'Ni', 'Cd', 'In', 'Mn', 'Zr', 'Cr',
                                            'Pt', 'Hg', 'Pb', 'X']) +
                     one_of_k_encoding_unk(atom.GetTotalNumHs(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) +
-                    one_of_k_encoding_unk(atom.GetValence(Chem.ValenceType.IMPLICIT), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) +
+                    one_of_k_encoding_unk(atom.GetImplicitValence(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) +
                     [atom.GetIsAromatic()]), atom.GetDegree()
 
 
