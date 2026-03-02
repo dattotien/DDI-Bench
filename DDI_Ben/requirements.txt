@@ -9,6 +9,7 @@ seaborn
 joblib
 setproctitle
 wandb
+PyYAML>=6.0
 
 torch>=2.0
 torchvision
