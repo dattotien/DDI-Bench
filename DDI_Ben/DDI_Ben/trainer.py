@@ -196,13 +196,11 @@ class Trainer():
                 results['accuracy'] = accuracy
                 results['f1'] = f1
                 results['kappa'] = kappa
-                results['loss'] = np.mean(losses)
-                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: Loss: {:.5}, F1-score : {:.5}, Accuracy : {:.5}, Kappa : {:.5}\n'.format(split ,epoch, split, results['loss'], results['f1'], results['accuracy'], results['kappa'])
+                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: F1-score : {:.5}, Accuracy : {:.5}, Kappa : {:.5}\n'.format(split ,epoch, split, results['f1'], results['accuracy'], results['kappa'])
                 wandb.log({
                     f"{split}/f1": results['f1'],
                     f"{split}/accuracy": results['accuracy'],
                     f"{split}/kappa": results['kappa'],
-                    f"{split}/loss": results['loss'],
                     "epoch": epoch
                 })
             elif self.args.dataset == 'twosides':
@@ -234,11 +232,9 @@ class Trainer():
                 results['PR-AUC'] = np.array(prc_auc).mean()
                 results['AUC-ROC'] = np.array(roc_auc).mean()
                 results['AP@K'] = np.array(apk_list).mean()
-                results['loss'] = np.mean(losses)
-                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: Loss: {:.5}, PR-AUC : {:.5},  AUC-ROC: {:.5}, AP@K : {:.5}\n'.format(split ,epoch, split, results['loss'], results['PR-AUC'], results['AUC-ROC'], results['AP@K'])
+                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: PR-AUC : {:.5},  AUC-ROC: {:.5}, AP@K : {:.5}\n'.format(split ,epoch, split, results['PR-AUC'], results['AUC-ROC'], results['AP@K'])
                 wandb.log({
                     f"{split}/pr_auc": results['PR-AUC'],
-                    f"{split}/loss": results['loss'],
                     f"{split}/auc_roc": results['AUC-ROC'],
                     f"{split}/apk": results['AP@K'],
                     "epoch": epoch
