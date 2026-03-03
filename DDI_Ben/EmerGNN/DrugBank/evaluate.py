@@ -10,7 +10,6 @@ from hyperopt import fmin, tpe, hp, STATUS_OK, Trials, partial
 import time
 import wandb
 
-os.environ["WANDB_MODE"] = "disabled"
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 parser = argparse.ArgumentParser(description="Parser for EmerGNN")
