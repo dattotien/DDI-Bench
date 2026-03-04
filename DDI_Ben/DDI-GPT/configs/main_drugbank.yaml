@@ -17,7 +17,7 @@ resume: False
 use_gpu: True
 multi_gpu: False
 deepspeed: False
-gpuid: "3"
+gpuid: "0"
 gpu_num: 1
 eval: False
 test: True
