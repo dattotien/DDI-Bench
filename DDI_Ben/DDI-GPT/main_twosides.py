@@ -59,7 +59,7 @@ class biogpt_cls(nn.Module):
     def __init__(self, args):
         super(biogpt_cls, self).__init__()
         self.args = args
-        self.llm = BioGptModel.from_pretrained(args.pretrained_model_path)
+        self.llm = BioGptModel.from_pretrained(args.pretrained_model_path, use_safetensors=True)
 
         self.config = self.llm.config
         self.linear = nn.Linear(1024, 209)

@@ -75,7 +75,7 @@ class easy_bioclass(nn.Module):
     def __init__(self, args):
         super(easy_bioclass, self).__init__()
         self.args = args
-        self.llm = BioGptForSequenceClassification.from_pretrained(args.pretrained_model_path, num_labels=86)
+        self.llm = BioGptForSequenceClassification.from_pretrained(args.pretrained_model_path, num_labels=86, use_safetensors=True)
     
     def forward(
         self,input_ids,attention_mask,labels
