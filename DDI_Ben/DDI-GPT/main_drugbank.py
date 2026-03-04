@@ -229,7 +229,7 @@ def main():
             logger.info('local_rank={},epoch={}'.format(args.local_rank, epoch))
         train_dataset = drugbank_dataset_rl(args,'train')
         train_sampler = RandomSampler(train_dataset) # if args.local_rank == -1 else DistributedSampler(train_dataset)
-        train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.per_gpu_train_batch_size,num_workers=4)
+        train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.per_gpu_train_batch_size,num_workers=0)
 
         train_dataloader_adv = None
 
@@ -246,7 +246,7 @@ def main():
             # for setting in ['S2']:
                 dev_data = drugbank_dataset_rl(args,'valid_' + setting)
                 # dev_sampler = RandomSampler(dev_data) 
-                dev_dataloader = DataLoader(dev_data, shuffle=False, batch_size=args.eval_batch_size,num_workers=4)
+                dev_dataloader = DataLoader(dev_data, shuffle=False, batch_size=args.eval_batch_size,num_workers=0)
                 dev_acc, dev_f1, dev_kappa = evaluate(dev_dataloader,model,args,logger)
                 writer.add_scalar('dev_acc', dev_acc, epoch)
                 logger.info("epoch={}, setting {}, dev_acc={}, dev_f1={}, dev_kappa={}".format(epoch, setting, dev_acc, dev_f1, dev_kappa))
@@ -271,7 +271,7 @@ def main():
                 model.load_state_dict(checkpoint['model'])
                 dev_data = drugbank_dataset_rl(args,'test_' + setting)
                 # dev_sampler = RandomSampler(dev_data) 
-                dev_dataloader = DataLoader(dev_data, shuffle=False, batch_size=args.eval_batch_size,num_workers=4)
+                dev_dataloader = DataLoader(dev_data, shuffle=False, batch_size=args.eval_batch_size,num_workers=0)
                 test_acc, test_f1, test_kappa = evaluate(dev_dataloader,model,args,logger)
                 logger.info("setting {}, test_acc={}, test_f1={}, test_kappa={}. ".format(setting, test_acc, test_f1, test_kappa))
                 # logger.info("best epoch={},test_f1={}".format(checkpoint['epoch'], test_acc))
