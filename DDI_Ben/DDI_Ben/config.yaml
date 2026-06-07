@@ -1,0 +1,60 @@
+# DDI Prediction Configuration for MSTE, SSI-DDI and MLP models
+
+# General hyperparameters
+model: "MSTE" # choices: ['MSTE', 'SSI-DDI', 'MLP']
+name: "testrun" # Run name for saving/restoring models
+
+# Dataset settings
+dataset: "drugbank" # choices: ['drugbank']
+dataset_type: "cluster" # choices: ['random', 'cluster']
+
+# Training parameters
+gpu: 2
+lr: 0.0003 # learning rate
+weight_decay: 0.00001 # 1e-5
+lbl_smooth: 0.0 # Label smoothing
+epoch: 1 # training epochs
+batch_size: 128
+use_feat: 1 # Whether to use drug features (will be set to 0 for MSTE automatically)
+
+# Experiment settings
+seed: 124 # Random seed for reproducibility
+eval_skip: 1 # Evaluate every x epochs
+patience: 10 # Patience for early stopping
+
+# MSTE model parameters (only used when model='MSTE')
+kge_dim: 200 # hidden dimension for MSTE
+kge_gamma: 1 # gamma parameter for MSTE
+kge_dropout: 0.0 # dropout rate for MSTE
+kge_loss: "BCE_mean" # loss function for MSTE
+
+# MLP model parameters (only used when model='MLP')
+mlp_dropout: 0.1 # dropout rate for MLP
+mlp_dim: 200 # hidden dimension for MLP
+
+# File paths
+paths:
+  train_file: "./data/drugbank_cluster/train.txt"
+  valid_file: "./data/drugbank_cluster/valid_S0.txt"
+  test_s0_file: "./data/drugbank_cluster/test_S0.txt"
+  test_s1_file: "./data/drugbank_cluster/test_S1.txt"
+  test_s2_file: "./data/drugbank_cluster/test_S2.txt"
+  # Feature files
+  drugbank_features: "data/initial/drugbank/DB_molecular_feats.pkl"
+  drugbank_smiles: "data/initial/drugbank/id2smiles.json"
+  # Output directories
+  checkpoint_dir: "./checkpoints"
+  record_dir: "./record"
+
+# Label mappings for DDI types
+label_mappings:
+  "No Interaction": 0
+  "Synergism": 1
+  "Antagonism": 2
+  "New Effect": 3
+
+# Wandb configuration
+wandb:
+  entity: "tunglamngo-univesity-of-engineering-and-technology-vnu"
+  project: "DDI_NCKH_2025"
+  wandb_key: "c4816b32f37419d7d62dc261260293cdfb9d7190"

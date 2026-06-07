@@ -13,10 +13,11 @@ from sklearn.metrics import confusion_matrix
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import loss as loss_func
 import wandb
+from metric import get_evaluation_metrics
 
 
 class BaseModel(object):
-    def __init__(self, eval_ent, eval_rel, args, entity_vocab=None, relation_vocab=None):
+    def __init__(self, eval_ent, eval_rel, args, entity_vocab=None, relation_vocab=None, label_mapping=None):
         self.model = EmerGNN(eval_ent, eval_rel, args)
         if args.load_model:
             adversarial_suffix = '_adv' if args.adversarial else ''
@@ -34,6 +35,7 @@ class BaseModel(object):
 
         self.entity_vocab = entity_vocab
         self.relation_vocab = relation_vocab
+        self.label_mapping = label_mapping
 
         if args.adversarial:
             self.optimizer_ad = Adam(self.model.ad_net.parameters(), lr=self.args.lr, weight_decay=self.args.lamb)
@@ -41,7 +43,7 @@ class BaseModel(object):
             self.model.random_layer.cuda()
             self.model.ad_net.cuda()
 
-    def train(self, train_pos, train_neg, train1_pos, train1_neg, KG):
+    def train(self, train_pos, train_neg, train1_pos, train1_neg, KG, epoch=None):
         if self.args.adversarial:
             head, tail, label = train_pos[:, 0], train_pos[:, 1], train_pos[:, 2]
             head1, tail1, label1 = train1_pos[:, 0], train1_pos[:, 1], train1_pos[:, 2]
@@ -61,6 +63,8 @@ class BaseModel(object):
             head1, tail1, label1 = head1[perm], tail1[perm], label1[perm]
 
             loss_epoch = 0
+            ad_loss_epoch = 0
+            num_batches = 0
             self.model.train()
             for h, t, r, h1, t1, r1 in tqdm(batch_by_size(n_batch, head, tail, label, head1, tail1, label1, n_sample=n_train),
                 ncols=100, leave=False, total=len(head)//n_batch+int(len(head)%n_batch>0)):
@@ -82,16 +86,27 @@ class BaseModel(object):
                 num_elements = loss.numel()
                 loss = loss.sum()
                 ad_loss = loss_func.CDAN([final_layer_comb, pred_comb], self.model.ad_net, None, None, self.model.random_layer)*num_elements*self.args.adversarial_weight
-                print(f" | Classification Loss: {loss.item()} | Adversarial Loss: {ad_loss.item()} | Total loss: {loss.item() + ad_loss.item()}")
-                wandb.log({"train_loss": loss.item()})
-                wandb.log({"train_ad_loss": ad_loss.item()})
+                
+                loss_epoch += loss.item()
+                ad_loss_epoch += ad_loss.item()
+                num_batches += 1
+                
                 loss += ad_loss
-                wandb.log({"train_total_loss": loss.item()})
-
                 loss.backward()
                 self.optimizer.step()
                 self.optimizer_ad.step()
-                loss_epoch += loss.item()
+            
+            # Log average loss cho epoch
+            if wandb.run is not None and num_batches > 0:
+                log_dict = {
+                    "train/loss": loss_epoch / num_batches,
+                    "train/ad_loss": ad_loss_epoch / num_batches,
+                    "train/total_loss": (loss_epoch + ad_loss_epoch) / num_batches
+                }
+                if epoch is not None:
+                    wandb.log(log_dict, step=epoch)
+                else:
+                    wandb.log(log_dict)
 
         else:
             head, tail, label = train_pos[:,0], train_pos[:,1], train_pos[:,2]
@@ -99,6 +114,7 @@ class BaseModel(object):
             n_batch = self.args.n_batch
 
             loss_epoch = 0
+            num_batches = 0
             self.model.train()
             for h, t, r in tqdm(batch_by_size(n_batch, head, tail, label, n_sample=n_train),
                 ncols=100, leave=False, total=len(head)//n_batch+int(len(head)%n_batch>0)):
@@ -114,9 +130,18 @@ class BaseModel(object):
                 loss.backward()
                 self.optimizer.step()
                 loss_epoch += loss.item()
+                num_batches += 1
+            
+            # Log average loss cho epoch
+            if wandb.run is not None and num_batches > 0:
+                log_dict = {"train/loss": loss_epoch / num_batches}
+                if epoch is not None:
+                    wandb.log(log_dict, step=epoch)
+                else:
+                    wandb.log(log_dict)
 
 
-    def evaluate(self, test_pos, test_neg, KG):
+    def evaluate(self, test_pos, test_neg, KG, is_test=False, epoch=None, prefix=None):
         heads, tails, relas = test_pos[:,0], test_pos[:,1], test_pos[:,2]
         batch_size = self.args.test_batch_size
         num_batch = len(heads) // batch_size + int(len(heads)%batch_size>0)
@@ -136,15 +161,39 @@ class BaseModel(object):
         rela_probs = np.concatenate(rela_probs)
         pred = np.argmax(rela_probs, axis=1)
         label = relas.data.cpu().numpy()
-        accuracy = np.sum(pred == label) / len(pred)
-        f1 = f1_score(label, pred, average='macro')
-        kappa = cohen_kappa_score(label, pred)
+        
+        # Sử dụng get_evaluation_metrics từ metric.py
+        if self.label_mapping is not None:
+            results = get_evaluation_metrics(
+                all_labels=label,
+                all_preds=pred,
+                all_outputs=rela_probs,
+                label_mapping=self.label_mapping,
+                options=[1],
+                is_test=is_test,
+                epoch=epoch,
+                prefix=prefix
+            )
+            # Lấy kết quả từ option 1
+            macro_f1 = results[1]['macro']
+            micro_f1 = results[1]['micro']
+            
+            # Tính accuracy từ TP, FP, FN cho mỗi class
+            total_correct = sum([v['TP'] for v in results[1].values() if isinstance(v, dict)])
+            total_samples = len(label)
+            accuracy = total_correct / total_samples if total_samples > 0 else 0
+            
+            return macro_f1, accuracy, micro_f1, results[1]
+        else:
+            # Fallback to old method if label_mapping is not provided
+            accuracy = np.sum(pred == label) / len(pred)
+            f1 = f1_score(label, pred, average='macro')
+            kappa = cohen_kappa_score(label, pred)
 
-        cm = confusion_matrix(label, pred, labels=range(86))
-        accuracy_per_class = np.diagonal(cm) / cm.sum(axis=1)
+            cm = confusion_matrix(label, pred, labels=range(86))
+            accuracy_per_class = np.diagonal(cm) / cm.sum(axis=1)
 
-        return f1, accuracy, kappa, accuracy_per_class
-        # return f1, accuracy, kappa
+            return f1, accuracy, kappa, accuracy_per_class
 
     def test_single(self, triplet, KG):
         heads = triplet[0].unsqueeze(0)

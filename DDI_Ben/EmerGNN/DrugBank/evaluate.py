@@ -3,52 +3,50 @@ import argparse
 import torch
 import random
 from load_data import DataLoader
-
+import yaml
+from types import SimpleNamespace
 from base_model import BaseModel
 import numpy as np
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials, partial
 import time
 import wandb
 
-os.environ["WANDB_MODE"] = "disabled"
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-parser = argparse.ArgumentParser(description="Parser for EmerGNN")
-parser.add_argument('--task_dir', type=str, default='./', help='the directory to dataset')
-parser.add_argument('--dataset', type=str, default='S1_1', help='the directory to dataset')
-parser.add_argument('--lamb', type=float, default=7e-4, help='set weight decay value')
-parser.add_argument('--gpu', type=int, default=0, help='GPU id to load.')
-parser.add_argument('--n_dim', type=int, default=128, help='set embedding dimension')
-parser.add_argument('--lr', type=float, default=0.03, help='set learning rate')
-parser.add_argument('--save_model', action='store_true')
-parser.add_argument('--load_model', action='store_true')
-parser.add_argument('--n_epoch', type=int, default=100, help='number of training epochs')
-parser.add_argument('--n_batch', type=int, default=512, help='batch size')
-parser.add_argument('--epoch_per_test', type=int, default=5, help='frequency of testing')
-parser.add_argument('--test_batch_size', type=int, default=16, help='test batch size')
-parser.add_argument('--out_file_info', type=str, default='', help='extra string for the output file name')
-parser.add_argument('--seed', type=int, default=1234)
-parser.add_argument('--adversarial', action='store_true')
-parser.add_argument('--adversarial_weight', type=float, default=1, help='the weight of adversarial loss in the total loss.')
+
 
 class options:
     def __init__():
         pass
-
+def load_config(path):
+    with open(path, 'r') as f:
+        config = yaml.safe_load(f)
+    return SimpleNamespace(**config)
 
 if __name__ == '__main__':
-    args = parser.parse_args()
+    args = load_config("config/config.yaml")
     torch.cuda.set_device(args.gpu)
     dataloader = DataLoader(args)
     eval_ent, eval_rel = dataloader.eval_ent, dataloader.eval_rel
     args.all_ent, args.all_rel, args.eval_rel = dataloader.all_ent, dataloader.all_rel, dataloader.eval_rel
+    
+    # Load label_mapping từ config
+    label_mapping = args.label_mappings
+    
     KG = dataloader.KG
     vKG = dataloader.vKG
-    tKG = dataloader.tKG
     triplets = dataloader.triplets
     train_pos, train_neg = torch.LongTensor(triplets['train']).cuda(), None
     valid_pos, valid_neg = torch.LongTensor(triplets['valid']).cuda(), None
-    test_pos,  test_neg  = torch.LongTensor(triplets['test']).cuda(), None
+    
+    # Lấy 3 test sets từ dataloader
+    test_sets = {}
+    for name in ['S0', 'S1', 'S2']:
+        test_sets[name] = {
+            'pos': torch.LongTensor(dataloader.test_triplets[name]).cuda(),
+            'neg': None,
+            'KG': dataloader.test_KGs[name]
+        }
     if args.adversarial:
         tmp = args.dataset
         args.dataset = list(args.dataset)
@@ -57,7 +55,8 @@ if __name__ == '__main__':
         dataloader1 = DataLoader(args)
         triplets1 = dataloader1.triplets
         valid1_pos, valid1_neg = torch.LongTensor(triplets1['valid']).cuda(), None
-        test1_pos, test1_neg = torch.LongTensor(triplets1['test']).cuda(), None
+        # Sử dụng S1 test set cho adversarial training
+        test1_pos, test1_neg = torch.LongTensor(dataloader1.test_triplets['S1']).cuda(), None
         train1_pos = torch.cat([valid1_pos, test1_pos], dim=0).cuda()
         train1_neg = None
         args.dataset = tmp
@@ -98,37 +97,99 @@ if __name__ == '__main__':
             args.feat = 'E'
         
         wandb.init(project='EmerGNN_DrugBank', config=vars(args))
-        model = BaseModel(eval_ent, eval_rel, args)
+        model = BaseModel(eval_ent, eval_rel, args, label_mapping=label_mapping)
         best_acc = -1
+        best_str = ''
+        best_str_class = ''
         for e in range(args.n_epoch):
             dataloader.shuffle_train()
             KG = dataloader.KG
             train_pos = torch.LongTensor(dataloader.train_data).cuda()
             if args.adversarial:
-                model.train(train_pos, None, train1_pos, None, KG)
+                model.train(train_pos, None, train1_pos, None, KG, epoch=e+1)
             else:
-                model.train(train_pos, None, None, None, KG)
+                model.train(train_pos, None, None, None, KG, epoch=e+1)
             if (e+1) % args.epoch_per_test == 0:
-                v_f1, v_acc, v_kap, _ = model.evaluate(valid_pos, valid_neg, vKG)
-                t_f1, t_acc, t_kap, t_per_class = model.evaluate(test_pos,  test_neg,  tKG)
-                # v_f1, v_acc, v_kap = model.evaluate(valid_pos, valid_neg, vKG)
-                # t_f1, t_acc, t_kap = model.evaluate(test_pos,  test_neg,  tKG)
+                v_f1, v_acc, v_micro, v_results = model.evaluate(valid_pos, valid_neg, vKG, is_test=False, epoch=e+1)
+                
+                # Log validation metrics
+                log_dict = {
+                    "epoch": e+1,
+                    "val/macro_f1": v_f1,
+                    "val/accuracy": v_acc,
+                    "val/micro_f1": v_micro,
+                    "learning_rate": model.optimizer.param_groups[0]['lr']
+                }
+                
                 model.scheduler.step(v_f1)
                 if args.adversarial:
                     model.scheduler_ad.step(v_f1)
+                
                 time_now = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+                
+                # Log metrics to wandb
+                wandb.log({
+                    "epoch": e + 1,
+                    "valid/f1": v_f1,
+                    "valid/accuracy": v_acc,
+                    "valid/kappa": v_kap,
+                    "test/f1": t_f1,
+                    "test/accuracy": t_acc,
+                    "test/kappa": t_kap,
+                })
+                
                 out_str = time_now + ' :epoch:%d\tfeat:%s lr:%.6f lamb:%.8f n_batch:%d n_dim:%d layer:%d\t[Valid] f1:%.4f acc:%.4f kap:%.4f\t[Test] f1:%.4f acc:%.4f kap:%.4f' % (e+1, args.feat, args.lr, args.lamb, args.n_batch, args.n_dim, args.length, v_f1, v_acc, v_kap, t_f1, t_acc, t_kap)
                 out_str_class = f'[Test per class]: {t_per_class} \n'
                 if v_f1 > best_acc:
                     best_acc = v_f1
+                    
+                    # Test trên cả 3 test sets
+                    test_results = {}
+                    for name, test_data in test_sets.items():
+                        t_f1, t_acc, t_micro, t_res = model.evaluate(
+                            test_data['pos'], test_data['neg'], test_data['KG'], 
+                            is_test=False, epoch=e+1, prefix=f"test_{name}"
+                        )
+                        test_results[name] = {
+                            'macro_f1': t_f1,
+                            'accuracy': t_acc,
+                            'micro_f1': t_micro,
+                            'details': t_res
+                        }
+                        
+                        # Thêm vào log dict
+                        log_dict[f"test_{name}/macro_f1"] = t_f1
+                        log_dict[f"test_{name}/accuracy"] = t_acc
+                        log_dict[f"test_{name}/micro_f1"] = t_micro
+                    
+                    # Tạo output string cho cả 3 test sets
+                    test_str = ''
+                    for name in ['S0', 'S1', 'S2']:
+                        res = test_results[name]
+                        test_str += f'\t[Test {name}] macro_f1:{res["macro_f1"]:.4f} acc:{res["accuracy"]:.4f} micro_f1:{res["micro_f1"]:.4f}'
+                    
+                    out_str += test_str
                     best_str = out_str
+                    
+                    # Lưu chi tiết kết quả
+                    out_str_class = ''
+                    for name in ['S0', 'S1', 'S2']:
+                        out_str_class += f'[Test {name} per class]: {test_results[name]["details"]} \n'
                     best_str_class = out_str_class
+                    
                     if args.save_model:
                         model.save_model(best_str)
-                print(out_str)
-                with open(os.path.join('results', args.dataset+'_'+str(seed)+'_eval'+('_adv' if args.adversarial else '')+'.txt'), 'a+') as f:
-                    f.write(out_str + '\n')
-                    f.write(out_str_class + '\n')
+                    
+                    print(out_str)
+                    with open(os.path.join('results', args.dataset+'_'+str(seed)+'_eval'+('_adv' if args.adversarial else '')+'.txt'), 'a+') as f:
+                        f.write(out_str + '\n')
+                        f.write(out_str_class + '\n')
+                else:
+                    print(out_str + ' (No improvement, skip testing)')
+                
+                # Log to wandb
+                if wandb.run is not None:
+                    wandb.log(log_dict, step=e+1)
         print('Best results:\t' + best_str)
         with open(os.path.join('results', args.dataset+'_'+str(seed)+'_eval'+('_adv' if args.adversarial else '')+'.txt'), 'a+') as f:
             f.write('Best results:\t' + best_str + '\n\n')

@@ -1,0 +1,280 @@
+# Configuration file for running DDI models on Kaggle
+# Simply set enabled: true/false to run/skip models
+
+wandb:
+  entity: "tunglamngo-univesity-of-engineering-and-technology-vnu"
+  project: "DDI_NCKH_2025"
+  wandb_key: "c4816b32f37419d7d62dc261260293cdfb9d7190"
+
+# ============================================================================
+# MODELS CONFIGURATION
+# Edit 'enabled' to true/false to run/skip each model
+# Edit 'wandb_name' to change run name on Wandb
+# Edit 'args' to customize hyperparameters
+# ============================================================================
+
+models:
+  # DDI_Ben models
+  MLP:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "MLP_DrugBank"
+    args:
+      dataset: "drugbank"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      mlp_dropout: 0.1
+      mlp_dim: 200
+      use_feat: 1
+
+  Decagon:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "Decagon_DrugBank"
+    args:
+      dataset: "drugbank"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      decagon_dim: 200
+      decagon_drop: 0.1
+      use_feat: 1
+
+  TIGER:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "TIGER_DrugBank"
+    args:
+      dataset: "drugbank"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  SSI-DDI:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "SSI-DDI_DrugBank"
+    args:
+      dataset: "drugbank"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  MRCGNN:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "MRCGNN_DrugBank"
+    args:
+      dataset: "drugbank"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  KGE:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "KGE_DrugBank"
+    args:
+      dataset: "drugbank"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      kge_dim: 200
+      kge_gamma: 1
+      kge_dropout: 0
+      kge_loss: "BCE_mean"
+      use_feat: 1
+
+  # TWOSIDES versions
+  MLP_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "MLP_TWOSIDES"
+    args:
+      dataset: "twosides"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      mlp_dropout: 0.1
+      mlp_dim: 200
+      use_feat: 1
+
+  Decagon_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "Decagon_TWOSIDES"
+    args:
+      dataset: "twosides"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      decagon_dim: 200
+      decagon_drop: 0.1
+      use_feat: 1
+
+  TIGER_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "TIGER_TWOSIDES"
+    args:
+      dataset: "twosides"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  SSI-DDI_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "SSI-DDI_TWOSIDES"
+    args:
+      dataset: "twosides"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  MRCGNN_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "MRCGNN_TWOSIDES"
+    args:
+      dataset: "twosides"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  KGE_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "KGE_TWOSIDES"
+    args:
+      dataset: "twosides"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      kge_dim: 200
+      kge_gamma: 1
+      kge_dropout: 0
+      kge_loss: "BCE_mean"
+      use_feat: 1
+
+  # EmerGNN models
+  EmerGNN_DrugBank:
+    enabled: false # ← Change to true to run
+    type: "emergnn_drugbank"
+    wandb_name: "EmerGNN_DrugBank"
+    args:
+      dataset: "S1_1"
+      task_dir: "./"
+      lr: 0.003
+      lamb: 0.00000001
+      n_epoch: 100
+      n_batch: 64
+      n_dim: 32
+      gpu: 0
+      seed: 1234
+      epoch_per_test: 5
+      test_batch_size: 16
+      adversarial: false
+      adversarial_weight: 1
+      save_model: false
+      load_model: false
+
+  EmerGNN_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "emergnn_twosides"
+    wandb_name: "EmerGNN_TWOSIDES"
+    args:
+      dataset: "S1_1"
+      task_dir: "./"
+      lr: 0.03
+      lamb: 0.0007
+      n_epoch: 100
+      n_batch: 512
+      n_dim: 128
+      gpu: 0
+      seed: 1234
+      epoch_per_test: 5
+      test_batch_size: 16
+      adversarial: false
+      adversarial_weight: 1
+      save_model: false
+      load_model: false

@@ -1,4 +1,46 @@
 import random
+import numpy as np
+
+def _softmax(x: np.ndarray) -> np.ndarray:
+    """
+    Compute the softmax of a numpy array of logits.
+    """
+    # Compute the exponentials of x
+    exp_x = np.exp(x)
+    # Compute the sum of exponentials
+    sum_exp_x = np.sum(exp_x, axis=0)
+    # Compute softmax
+    return exp_x / sum_exp_x
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    """
+    Compute the sigmoid of a numpy array of logits.
+    """
+    return 1 / (1 + np.exp(-x))
+
+def _precision(tp: int, fp: int) -> float:
+    """
+    Compute precision given true positives, false positives, and false negatives.
+    """
+    if tp + fp == 0:
+        return 0.0
+    return tp / (tp + fp)
+
+def _recall(tp: int, fn: int) -> float:
+    """
+    Compute recall given true positives, false positives, and false negatives.
+    """
+    if tp + fn == 0:
+        return 0.0
+    return tp / (tp + fn)
+
+def _f1_score(tp: int, fp: int, fn: int) -> float:
+    """
+    Compute F1 score given true positives, false positives, and false negatives.
+    """
+    if 2 * tp + fp + fn == 0:
+        return 0.0
+    return 2 * tp / (2 * tp + fp + fn)
 
 def inplace_shuffle(*lists):
     idx = []

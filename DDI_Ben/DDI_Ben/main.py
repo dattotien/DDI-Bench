@@ -1,17 +1,36 @@
 import os
 import setproctitle
 import argparse
+import yaml
 from trainer import Trainer
 from utils import *
 import torch
 import numpy as np
+import wandb
+import warnings
 
+from kaggle_secrets import UserSecretsClient
 print('pid:', os.getpid())
+
+def load_config(config_path='config.yaml'):
+    """Load configuration from YAML file and convert to Namespace"""
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    return config
 
 def main():
     ### set process name
+    import warnings
+    warnings.filterwarnings('ignore', category=DeprecationWarning)
+    warnings.filterwarnings('ignore', category=UserWarning)
+    
+    # Suppress RDKit warnings
+    from rdkit import RDLogger
+    RDLogger.DisableLog('rdApp.*')
+    
     setproctitle.setproctitle('BNbench')
-
+    warnings.filterwarnings('ignore', category=DeprecationWarning)
+    warnings.filterwarnings('ignore', category=UserWarning)
     ### set hyperparameters
     parser = argparse.ArgumentParser(description='Task Aware Relation Graph for Few-shot Chemical Property Prediction')
     # general hyperparameters
@@ -34,22 +53,8 @@ def main():
     parser.add_argument('--eval_skip', default=1, type=int, help='Evaluate every x epochs')
     parser.add_argument('--patience', default=10, type=int, help='Patience for early stopping')
     
-    # KGE models
-    parser.add_argument('--kge_dim', type=int, default=200, help='hidden dimension.')
-    parser.add_argument('--kge_gamma', type=int, default=1, help='gamma parameter.')
-    parser.add_argument('--kge_dropout', type=float, default=0, help='dropout rate.') ### DDI best 0
-    parser.add_argument('--kge_loss', type=str, default='BCE_mean',  help='loss function')
-
-    # MLP model
-    parser.add_argument('--mlp_dropout', type=float, default=0.1, help='dropout rate.')
-    parser.add_argument('--mlp_dim', type=int, default=200, help='hidden dimension.')
-
-    ### Decagon model decagon_drop
-    parser.add_argument('--decagon_dim', type=int, default=200, help='hidden dimension.')
-    parser.add_argument('--decagon_drop', type=float,	default=0.1, help='Dropout to use in Decagon model')
-
-    ### set basic configurations
-    args = parser.parse_args()
+    ### Convert config dict to Namespace
+    args = argparse.Namespace(**config)
 
     ### set random seed
     random.seed(args.seed)
@@ -58,19 +63,24 @@ def main():
 
     if args.model in ['MSTE']:
         args.use_feat = 0
-        if args.dataset in ['twosides']:
-            args.batch_size = 128
-    
-    if args.model == 'SAGAN':
-        args.adversarial = 1
-    else:
-        args.adversarial = 0
 
     args.device = "cuda:"+ str(args.gpu) if torch.cuda.is_available() else "cpu"
-
+    try:
+        user_secrets = UserSecretsClient()
+        my_secret = user_secrets.get_secret("wandb_key") 
+        wandb.login(key=my_secret)
+    except:
+        wandb.login(key="c4816b32f37419d7d62dc261260293cdfb9d7190")
+    wandb.init(
+        entity="tunglamngo-univesity-of-engineering-and-technology-vnu",
+        project="DDI_NCKH_2025",
+        name=args.name,
+        config=vars(args)
+    )
     ### Training step in the trainer
     trainer = Trainer(args)
     trainer.run()
+    wandb.finish()
 
 if __name__ == "__main__":
     main()

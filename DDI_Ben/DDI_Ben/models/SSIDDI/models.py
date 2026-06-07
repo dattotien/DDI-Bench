@@ -80,10 +80,7 @@ class SSI_DDI(nn.Module):
         # attentions = None
         scores = self.KGE(kge_heads, kge_tails, rels, attentions)
 
-        if self.args.adversarial:
-            return scores, torch.cat([kge_heads.mean(1), kge_tails.mean(1)], dim = 1)
-        else:
-            return scores
+        return scores
 
     def loss(self, pred, true_label):
         if self.args.dataset == 'drugbank':

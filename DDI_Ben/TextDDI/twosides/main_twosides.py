@@ -16,13 +16,13 @@ import argparse
 import torch.distributed as dist
 from transformers import AutoTokenizer
 from datetime import date
-from transformers import RobertaTokenizer,get_linear_schedule_with_warmup,RobertaForMultipleChoice,AdamW,get_scheduler
+from transformers import RobertaTokenizer,get_linear_schedule_with_warmup,RobertaForMultipleChoice,get_scheduler
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler, ConcatDataset
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 from tools.drugbank_dataset_rl import drugbank_dataset_rl
 from tools.twosides_dataset_rl import twosides_dataset_rl
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 from tools.common import seed_everything,Args,format_time
 from torch.utils.data.distributed import DistributedSampler
 from torch.distributed import get_rank

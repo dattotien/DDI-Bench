@@ -59,7 +59,7 @@ class biogpt_cls(nn.Module):
     def __init__(self, args):
         super(biogpt_cls, self).__init__()
         self.args = args
-        self.llm = BioGptModel.from_pretrained(args.pretrained_model_path)
+        self.llm = BioGptModel.from_pretrained(args.pretrained_model_path, use_safetensors=True)
 
         self.config = self.llm.config
         self.linear = nn.Linear(1024, 209)
@@ -305,7 +305,7 @@ def main():
             for setting in eval_set:
                 dev_data = twosides_dataset_rl(args,'valid_' + setting)
                 dev_sampler = RandomSampler(dev_data) # if args.local_rank == -1 else DistributedSampler(dev_data)
-                dev_dataloader = DataLoader(dev_data, sampler=dev_sampler, batch_size=args.eval_batch_size,num_workers=8)
+                dev_dataloader = DataLoader(dev_data, sampler=dev_sampler, batch_size=args.eval_batch_size,num_workers=0)
                 roc_auc, prc_auc, ap = evaluate(dev_dataloader,model,args,logger)
                 # writer.add_scalar('dev_acc', dev_acc, epoch)
                 logger.info("epoch={}, setting {},roc_auc={:.4f},prc_auc={:.4f},ap={:.4f}".format(epoch,setting,roc_auc,prc_auc,ap))
@@ -330,7 +330,7 @@ def main():
                 model.load_state_dict(checkpoint['model'])
                 dev_data = twosides_dataset_rl(args,'test_' + setting)
                 dev_sampler = RandomSampler(dev_data) # if args.local_rank == -1 else DistributedSampler(dev_data)
-                dev_dataloader = DataLoader(dev_data, sampler=dev_sampler, batch_size=args.eval_batch_size,num_workers=8)
+                dev_dataloader = DataLoader(dev_data, sampler=dev_sampler, batch_size=args.eval_batch_size,num_workers=0)
                 roc_auc, prc_auc, ap = evaluate(dev_dataloader,model,args,logger)
 
                 logger.info("test best_checkpoint_path={}, setting {}, roc_auc={:.4f},prc_auc={:.4f},ap={:.4f}".format(best_checkpoint_path[setting], setting,roc_auc,prc_auc,ap))

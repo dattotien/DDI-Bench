@@ -1,0 +1,42 @@
+task_dir: "./"
+dataset: "S1_1"
+self_eval_rel: 86
+self_eval_ent: 1710
+
+train_ddi: "./data/S0_finger_55/train_ddi.txt"
+valid_ddi: "./data/S0_finger_55/valid_ddi.txt"
+test_ddi_s0: "./data/S0_finger_55/test_ddi.txt"
+test_ddi_s1: "./data/S1_finger_55/test_ddi.txt"
+test_ddi_s2: "./data/S2_finger_55/test_ddi.txt"
+
+kg_train: "./data/KG.txt"
+kg_valid: "./data/KG.txt"
+kg_test: "./data/KG.txt"
+
+node2id_path: "./data/node2id.json"
+entity_drug_path: "./data/entity_drug.json"
+relation2id_path: "./data/relation2id.json"
+
+lamb: 7e-4
+gpu: 0
+n_dim: 128
+lr: 0.03
+
+save_model: false
+load_model: false
+
+n_epoch: 100
+n_batch: 512
+epoch_per_test: 5
+test_batch_size: 16
+
+out_file_info: ""
+seed: 1234
+
+adversarial: false
+adversarial_weight: 1
+label_mappings:
+  "No Interaction": 0
+  "Synergism": 1
+  "Antagonism": 2
+  "New Effect": 3

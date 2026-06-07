@@ -1,7 +1,7 @@
 # common data setting
 max_length: 256
 dataset : 'twosides'
-pretrained_model_path: './pretrained_model_path/roberta-large' #
+pretrained_model_path: 'roberta-large' #
 info_dict_path: 'data/twosides/twosides_sents.json'
 annotation: 'rl0_twosides_large'
 initialize_checkpoint: './checkpoints/06-22/twosides_finetune-roberta-large/checkpoint_epoch10.pt'

@@ -19,8 +19,8 @@ import math
 ### SSI-DDI ### 
 
 
-num_ent = {'drugbank': 1710, 'twosides': 645, 'HetioNet': 34124}
-num_rel = {'drugbank': 86, 'twosides': 209} # 209, 309
+num_ent = {'drugbank':  1295, 'HetioNet': 34124}
+num_rel = {'drugbank': 4}
 
 class Data_record():
     def __init__(self, args):
@@ -47,22 +47,12 @@ class Data_record():
         self.split_not_train = [j for j in self.include_splits if j != 'train']
         
         for split in self.include_splits:
-            if split == 'train' and self.args.model in ['MSTE'] and args.dataset == 'twosides': 
-                for j in range(int(len(self.triplets[split])/2)):
-                    sub, obj, rel, neg_add = self.triplets[split][j*2][0], self.triplets[split][j*2][1], np.where(np.array(self.triplets[split][j*2][2])[:-1]==1)[0], [self.triplets[split][j*2+1][0], self.triplets[split][j*2+1][1]]
-                    for k in rel:
-                        self.data[split].append((sub, obj, [neg_add[0], neg_add[1], k]))
-                        sr2o[(sub, obj)].add((neg_add[0], neg_add[1], k))
-            else:
-                for j in self.triplets[split]:
-                    # sub, obj, rel = self.ent2id[j[0]], self.ent2id[j[1]], self.rel2id[str(j[2])]
-                    sub, obj, rel = j[0], j[1], j[2]
-                    self.data[split].append((sub, obj, rel))
+            for j in self.triplets[split]:
+                sub, obj, rel = j[0], j[1], j[2]
+                self.data[split].append((sub, obj, rel))
 
-                    if split == 'train': 
-                        if self.args.model in ['Decagon'] and args.dataset == 'twosides':
-                            self.true_data = self.data[split]
-                        sr2o[(sub, obj)].add(rel)
+                if split == 'train': 
+                    sr2o[(sub, obj)].add(rel)
         
         if args.use_feat:
             self.feat = torch.FloatTensor(np.array(load_feature(args))).to(self.device)
@@ -82,12 +72,8 @@ class Data_record():
         self.triples  = ddict(list)
 
         ### train triples
-        if self.args.dataset == 'twosides' and self.args.model in ['MSTE']:
-            for sub, obj, rel in self.data['train']:
-                self.triples['train'].append({'triple':(sub, obj, -1), 'label': rel, 'sub_samp': 1})
-        else:
-            for (sub, rel), obj in self.sr2o.items():
-                self.triples['train'].append({'triple':(sub, rel, -1), 'label': self.sr2o[(sub, rel)], 'sub_samp': 1})
+        for (sub, rel), obj in self.sr2o.items():
+            self.triples['train'].append({'triple':(sub, rel, -1), 'label': self.sr2o[(sub, rel)], 'sub_samp': 1})
 
         ### valid & test triplets
         for split in self.split_not_train:
@@ -96,129 +82,10 @@ class Data_record():
 
         self.triples = dict(self.triples)
 
-        if args.model == 'Decagon':
-            self.edge_index = []
-            if args.dataset == 'twosides':
-                for sub, obj, rel in self.data['train']:
-                    if rel[-1] == 1:
-                        self.edge_index.append([sub, obj])
-            else:
-                for sub, obj, rel in self.data['train']:
-                    self.edge_index.append([sub, obj])
-            trip_de = []
-            if args.dataset == 'twosides':
-                file = open('./data/initial/twosides/relations_2hop.txt')
-            else:
-                file = open('./data/initial/drugbank/relations_2hop.txt')
-            for j in file:
-                str_lin = j.strip().split(' ')
-                trip = [int(j) for j in str_lin]
-                # if trip[2] in [1,21]:
-                if trip[2] in [1, 5, 6, 7, 10, 18]:
-                    trip_de.append([trip[0], trip[1]])
-            num_begin = num_ent[args.dataset]
-            ent_in = np.unique(np.array(trip_de).flatten())
-            ind_dict = {}
-            for j in ent_in:
-                if j >= num_ent[args.dataset]:
-                    ind_dict[j] = num_begin
-                    num_begin += 1
-                else:
-                    ind_dict[j] = j
-            for j in trip_de:
-                j = [ind_dict[j[0]], ind_dict[j[1]]]
-                self.edge_index.append(j)
-
-            self.edge_index	= torch.LongTensor(self.edge_index).to(self.device).t()
-
-            if args.use_feat:
-                feat = torch.zeros((num_begin, self.feat_dim))
-                torch.nn.init.xavier_uniform_(feat)
-                feat[:num_ent[args.dataset]] = self.feat
-                self.feat = feat
-        elif args.model == 'TIGER':
-            if args.dataset == 'twosides':
-                with open('./data/initial/twosides/cid2id.json', 'r') as file:
-                    cid2id = json.load(file)
-                with open('./data/initial/twosides/cid2smiles.json', 'r') as file:
-                    cid2smiles = json.load(file)
-                TG_id2smiles = {str(cid2id[j]):cid2smiles[j] for j in cid2smiles}
-                print("load drug smiles graphs!!")
-                TG_smile_graph, num_rel_mol_update, max_smiles_degree = smile_to_graph('data/{}'.format(folder_name), TG_id2smiles)
-                print("load networks !!")
-                num_node, network_edge_index, network_rel_index, TG_num_rel = read_network('./data/initial/twosides/relations_2hop.txt')
-                print("load DDI samples!!")
-                TG_labels = 0
-                TG_interactions = np.concatenate([np.array([j[:2] for j in self.triplets[k]]) for k in self.include_splits])
-                all_contained_drugs = np.unique(TG_interactions)
-                all_contained_drugs = set([str(j) for j in all_contained_drugs])
-                print("generate subgraphs!!")
-                TG_drug_subgraphs, max_subgraph_degree, num_rel_update = generate_node_subgraphs(folder_name, all_contained_drugs,network_edge_index, network_rel_index,TG_num_rel, args)
-
-                TG_data_sta = {
-                    'num_nodes': num_node + 1,
-                    'num_rel_mol': num_rel_mol_update + 1,
-                    'num_rel_graph': num_rel_update + 1,
-                    'num_interactions': len(TG_interactions),
-                    'num_drugs_DDI': len(all_contained_drugs),
-                    'max_degree_graph': max_smiles_degree + 1,
-                    'max_degree_node': int(max_subgraph_degree)+1
-                }
-
-                print(TG_data_sta)
-                self.TG_interactions = TG_interactions
-                self.TG_labels = TG_labels
-                self.TG_smile_graph = TG_smile_graph
-                self.TG_drug_subgraphs = TG_drug_subgraphs
-                self.TG_data_sta = TG_data_sta
-
-            elif args.dataset == 'drugbank':
-                with open('data/initial/drugbank/DB_molecular_feats.pkl', 'rb') as f:
-                    x = pkl.load(f, encoding='utf-8')
-                TG_id2smiles = {str(j): x['SMILES'][j] for j in range(1710)}
-                for j in [   6,  136,  889, 1171, 1239, 1254]:
-                    TG_id2smiles[str(j)] = ''
-
-                print("load drug smiles graphs!!")
-                TG_smile_graph, num_rel_mol_update, max_smiles_degree = smile_to_graph('data/{}'.format(folder_name), TG_id2smiles)
-                print("load networks !!")
-                num_node, network_edge_index, network_rel_index, TG_num_rel = read_network('./data/initial/drugbank/relations_2hop.txt')
-                print("load DDI samples!!")
-                ### this part remain (need to be simplified)
-                TG_triplet_all = np.concatenate([np.array(self.triplets[j]) for j in self.include_splits])
-                TG_interactions = TG_triplet_all[:, :2]
-                TG_labels = TG_triplet_all[:, 2]
-                all_contained_drugs = np.unique(TG_interactions)
-                all_contained_drugs = set([str(j) for j in all_contained_drugs])
-                print("generate subgraphs!!")
-                TG_drug_subgraphs, max_subgraph_degree, num_rel_update = generate_node_subgraphs(folder_name, all_contained_drugs,network_edge_index, network_rel_index,TG_num_rel, args)
-
-                TG_data_sta = {
-                    'num_nodes': num_node + 1,
-                    'num_rel_mol': num_rel_mol_update + 1,
-                    'num_rel_graph': num_rel_update + 1,
-                    'num_interactions': len(TG_interactions),
-                    'num_drugs_DDI': len(all_contained_drugs),
-                    'max_degree_graph': max_smiles_degree + 1,
-                    'max_degree_node': int(max_subgraph_degree)+1
-                }
-
-                print(TG_data_sta)
-                self.TG_interactions = TG_interactions
-                self.TG_labels = TG_labels
-                self.TG_smile_graph = TG_smile_graph
-                self.TG_drug_subgraphs = TG_drug_subgraphs
-                self.TG_data_sta = TG_data_sta
-        elif args.model in ['SSI-DDI', 'SAGAN']:
-            if args.dataset == 'drugbank':
-                with open('data/initial/drugbank/id2smiles.json', 'r') as file:
-                    id2smiles = json.load(file)
-            elif args.dataset == 'twosides':
-                with open('./data/initial/twosides/cid2id.json', 'r') as file:
-                    cid2id = json.load(file)
-                with open('./data/initial/twosides/cid2smiles.json', 'r') as file:
-                    cid2smiles = json.load(file)
-                id2smiles = {str(cid2id[j]):cid2smiles[j] for j in cid2smiles}
+        if args.model == 'SSI-DDI':
+            smiles_path = args.paths['drugbank_smiles']
+            with open(smiles_path, 'r') as file:
+                id2smiles = json.load(file)
 
             drug_id_mol_graph_tup = [Chem.MolFromSmiles(id2smiles[j].strip()) for j in id2smiles] 
             self.ATOM_MAX_NUM = np.max([m.GetNumAtoms() for m in drug_id_mol_graph_tup])
@@ -237,67 +104,17 @@ class Data_record():
             self.MOL_EDGE_LIST_FEAT_MTX = [get_mol_edge_list_and_feat_mtx(mol) for mol in drug_id_mol_graph_tup]
 
             self.TOTAL_ATOM_FEATS = self.MOL_EDGE_LIST_FEAT_MTX[0][1].shape[-1]
-        elif args.model == 'MRCGNN':
-            ### feature: self.feat
-            idd = np.arange(num_ent[args.dataset])
-            iddd = np.random.permutation(idd)
-            mrc_y_a = torch.cat((torch.ones(num_ent[args.dataset], 1), torch.zeros(num_ent[args.dataset], 1)), dim=1)
-            if args.dataset == 'drugbank':
-                edge_edge = np.array(self.triplets['train'])[:,:2].tolist()
-                edge_type = np.array(self.triplets['train'])[:,2].tolist()
-            elif args.dataset == 'twosides':
-                edge_edge, edge_type = [], []
-                for sub, obj, rel in self.data['train']:
-                    if rel[-1] == 0:
-                        continue
-                    iddxx = np.where(np.array(rel)[:-1]==1)[0]
-                    for ll in iddxx:
-                        edge_edge.append([sub, obj])
-                        edge_type.append(ll)
-
-            edge_edge += [[b,a] for a,b in edge_edge]
-            edge_edge = torch.tensor(edge_edge, dtype=torch.long) ### need add reverse edges in
-            edge_type_reverse = edge_type + edge_type
-            self.dt_o = DATA.Data(x=self.feat, edge_index=edge_edge.t().contiguous(), edge_type=edge_type_reverse)
-            self.feat_a = self.feat[iddd]
-            self.dt_s = DATA.Data(x=self.feat_a, edge_index=edge_edge.t().contiguous(), edge_type=edge_type_reverse)
-            random.shuffle(edge_type)
-            shuffle_edge_type_reverse = edge_type + edge_type
-            self.dt_a = DATA.Data(x=self.feat, y = mrc_y_a, edge_type=shuffle_edge_type_reverse)
 
         ### the main part
         self.data_iter = {}
-        if args.model == 'TIGER':
-            if args.dataset == 'drugbank':
-                self.data_iter['train'] = DataLoader(DTADataset(x=np.array(self.triplets['train'])[:,:2], y=np.array(self.triplets['train'])[:,2], sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.dataset), batch_size=args.batch_size, shuffle=True, collate_fn=collate, drop_last=True)
-                for j in self.split_not_train:
-                    self.data_iter[j] = DataLoader(DTADataset(x=np.array(self.triplets[j])[:,:2], y=np.array(self.triplets[j])[:,2], sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.dataset), batch_size=args.batch_size, shuffle=False, collate_fn=collate)
-            elif args.dataset == 'twosides':
-                self.data_iter['train'] = DataLoader(DTADataset(x=np.array([k[:2] for k in self.triplets['train']]), y=np.array([list(k[2]) for k in self.triplets['train']]), sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.dataset), batch_size=args.batch_size, shuffle=True, collate_fn=collate, drop_last=True)
-                for j in self.split_not_train:
-                    self.data_iter[j] = DataLoader(DTADataset(x=np.array([k[:2] for k in self.triplets[j]]), y=np.array([list(k[2]) for k in self.triplets[j]]), sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.dataset), batch_size=args.batch_size, shuffle=False, collate_fn=collate)
-        elif args.model in ['SSI-DDI', 'SAGAN']:
-            if args.dataset == 'drugbank':
-                train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-                if args.adversarial:
-                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
-                    train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
-                for j in self.split_not_train:
-                    dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
-            elif args.dataset == 'twosides':
-                train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-                if args.adversarial:
-                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
-                    train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
-                for j in self.split_not_train:
-                    dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
+        if args.model == 'SSI-DDI':
+            train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+            self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+            for j in self.split_not_train:
+                dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
         else:
+            # MSTE model uses default TrainDataset and TestDataset
             self.data_iter['train'] = self.get_data_loader(TrainDataset, 'train', args.batch_size)
             for j in self.split_not_train:
                 self.data_iter[j] = self.get_data_loader(TestDataset, j, args.batch_size, shuffle = False)
@@ -350,17 +167,10 @@ class TrainDataset(Dataset):
 			triple, label, sub_samp	= torch.LongTensor(ele['triple']), np.array(ele['label']).astype(int), np.float32(ele['sub_samp'])
 		else:
 			triple, label = torch.LongTensor([ele['triple'][0], ele['triple'][1], -1]), np.array(ele['label']).astype(int) 
-		if self.p.dataset == 'drugbank': trp_label = self.get_label_ddi(label) 
-		elif self.p.dataset == 'twosides': 
-			label = label[0]
-			trp_label = torch.FloatTensor(label)
+		trp_label = self.get_label_ddi(label)
         
 		if self.p.model in ['MSTE']:
-			if self.p.dataset == 'drugbank':
-				triple = torch.LongTensor([ele['triple'][0], ele['triple'][1], ele['label'][0]])
-			elif self.p.dataset == 'twosides':
-				triple = torch.LongTensor([ele['triple'][0], ele['triple'][1], ele['label'][2], ele['label'][0] , ele['label'][1]])
-				trp_label = torch.LongTensor([ele['label'][2]])
+			triple = torch.LongTensor([ele['triple'][0], ele['triple'][1], ele['label'][0]])
 
 		if self.p.lbl_smooth != 0.0:
 			trp_label = (1.0 - self.p.lbl_smooth)*trp_label + (1.0/self.p.num_ent)
@@ -389,10 +199,8 @@ class TestDataset(Dataset):
 
 	def __getitem__(self, idx):
 		ele		= self.triples[idx]
-		if self.p.dataset == 'drugbank': triple, label	= torch.LongTensor(ele['triple']), np.array(ele['label']).astype(int)
-		elif self.p.dataset == 'twosides': triple, label	= torch.LongTensor([ele['triple'][0], ele['triple'][1], -1]), np.array(ele['label'])[0]
-		if self.p.dataset == 'drugbank': label		= self.get_label_ddi(label)
-		elif self.p.dataset == 'twosides': label = torch.FloatTensor(label)
+		triple, label	= torch.LongTensor(ele['triple']), np.array(ele['label']).astype(int)
+		label		= self.get_label_ddi(label)
 
 		return triple, label
 

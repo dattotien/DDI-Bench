@@ -1,0 +1,109 @@
+================================================================================
+KAGGLE QUICK START - SIÊU ĐƠN GIẢN
+================================================================================
+
+🚀 CÁCH 1: DÙNG NOTEBOOK (KHUYÊN DÙNG)
+================================================================================
+
+Mở kaggle_runner.ipynb và:
+
+1. ▶️ Chạy cell 1: Cài PyYAML
+   !pip install PyYAML -q
+
+2. ✏️ Edit cell 2: Bật/tắt models
+   %%writefile config.yaml
+   ...
+   MLP:
+     enabled: true   ← ĐỔI Ở ĐÂY
+   ...
+
+3. ▶️ Chạy cell 3: Run!
+   !python runner.py
+
+VẬY LÀ XONG! 🎉
+
+
+🚀 CÁCH 2: DÙNG TERMINAL
+================================================================================
+
+BƯỚC 1: CÀI PYYAML
+-------------------
+!pip install PyYAML
+
+
+BƯỚC 2: CHỈNH CONFIG.YAML
+--------------------------
+Mở config.yaml và sửa enabled: true/false
+
+Ví dụ - chỉ chạy MLP và Decagon:
+
+models:
+  MLP:
+    enabled: true    ← BẬT
+    ...
+  
+  Decagon:
+    enabled: true    ← BẬT
+    ...
+  
+  TIGER:
+    enabled: false   ← TẮT
+    ...
+
+
+BƯỚC 3: CHẠY!
+-------------
+!python runner.py
+
+
+DONE! 🎉
+========
+
+Xem kết quả trên Wandb:
+- DrugBank: Accuracy, Macro F1, Kappa
+- TWOSIDES: ROC-AUC, PR-AUC, AP@K
+
+
+================================================================================
+MODELS CÓ SẴN
+================================================================================
+
+✓ MLP              (DrugBank)
+✓ Decagon          (DrugBank)
+✓ TIGER            (DrugBank)
+✓ SSI-DDI          (DrugBank)
+✓ MRCGNN           (DrugBank)
+✓ KGE              (DrugBank)
+✓ MLP_TWOSIDES     (TWOSIDES)
+✓ EmerGNN_DrugBank
+✓ EmerGNN_TWOSIDES
+
+
+================================================================================
+TÙY CHỈNH (OPTIONAL)
+================================================================================
+
+Đổi hyperparameters trong config cell/file:
+
+models:
+  MLP:
+    enabled: true
+    wandb_name: "MLP_Exp1"    ← Đổi tên trên wandb
+    args:
+      dataset: "drugbank"     ← drugbank hoặc twosides
+      lr: 0.0003              ← Learning rate
+      epoch: 100              ← Số epochs (đổi thành 5 để test nhanh)
+      batch_size: 128         ← Batch size
+      gpu: 0                  ← GPU ID
+
+
+================================================================================
+
+✨ KHUYÊN DÙNG: Mở notebook kaggle_runner.ipynb
+   - Cell 1: Install
+   - Cell 2: Edit config (%%writefile)
+   - Cell 3: Run!
+
+VẬY LÀ XONG! 🚀
+
+================================================================================
