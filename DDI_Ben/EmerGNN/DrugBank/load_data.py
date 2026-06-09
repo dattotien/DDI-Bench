@@ -23,23 +23,21 @@ class DataLoader:
         }
         
         self.process_files_ddi(ddi_paths, saved_relation2id)
-        self.process_files_kg(kg_paths, saved_relation2id)
-        self.load_ent_id()
 
         if hasattr(params, 'use_pair_kg') and params.use_pair_kg:
             self.use_pair_kg = True
-            
-            # Build global KG adjacency list
-            global_adj = defaultdict(list)
-            for h, t, r in self.train_kg:
-                global_adj[h].append((t, r))
+            self.all_ent = self.eval_ent
+            self.all_rel = self.eval_rel
+            self.load_ent_id()
                 
-            self.triplets['train'], self.train_pair_kgs = self.load_pair_kgs_from_npz(params.train_kg_npz, global_adj)
-            self.triplets['valid'], self.valid_pair_kgs = self.load_pair_kgs_from_npz(params.valid_kg_npz, global_adj)
-            self.triplets['test'], self.test_pair_kgs = self.load_pair_kgs_from_npz(params.test_kg_npz, global_adj)
+            self.triplets['train'], self.train_pair_kgs = self.load_pair_kgs_from_npz(params.train_kg_npz)
+            self.triplets['valid'], self.valid_pair_kgs = self.load_pair_kgs_from_npz(params.valid_kg_npz)
+            self.triplets['test'], self.test_pair_kgs = self.load_pair_kgs_from_npz(params.test_kg_npz)
             
             self.train_data = self.triplets['train']
         else:
+            self.process_files_kg(kg_paths, saved_relation2id)
+            self.load_ent_id()
             self.use_pair_kg = False
             self.shuffle_train()
             self.vKG = self.load_graph(np.concatenate([self.triplets['train'], self.valid_kg], axis=0))
@@ -212,8 +210,8 @@ class DataLoader:
         adjs = torch.sparse_coo_tensor(indices=torch.LongTensor(edges).t(), values=torch.FloatTensor(values), size=torch.Size([self.all_ent, self.all_ent, 2*self.all_rel+1]), requires_grad=False).cuda()
         return adjs
 
-    def load_pair_kgs_from_npz(self, npz_path, global_adj):
-        print(f"Loading and inducing pair-specific KGs from {npz_path}...")
+    def load_pair_kgs_from_npz(self, npz_path):
+        print(f"Loading pair-specific KGs from {npz_path}...")
         data = np.load(npz_path)
         
         offsets = data['offsets']
@@ -228,14 +226,18 @@ class DataLoader:
         
         pair_kgs = []
         for i in range(num_pairs):
+            h = heads[i]
+            t = tails[i]
+            r = rels[i]
             node_list = nodes[offsets[i] : offsets[i] + n_nodes[i]]
-            sub_triplets = []
             node_set = set(node_list)
+            
+            sub_triplets = []
             for u in node_set:
-                if u in global_adj:
-                    for v, r in global_adj[u]:
-                        if v in node_set:
-                            sub_triplets.append([u, v, r])
+                if u != h:
+                    sub_triplets.append([h, u, r])
+                if u != t:
+                    sub_triplets.append([u, t, r])
             
             sub_triplets = np.array(sub_triplets) if len(sub_triplets) > 0 else np.empty((0, 3), dtype='int')
             pair_kgs.append(self.load_graph_from_triplets(sub_triplets))
