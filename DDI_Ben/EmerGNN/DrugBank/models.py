@@ -54,6 +54,19 @@ class EmerGNN(nn.Module):
                 nn.init.xavier_uniform_(param.data)
 
     def enc_ht(self, head, tail, KG, visualize=False):
+        if hasattr(self.args, 'use_pair_kg') and self.args.use_pair_kg:
+            embeddings = []
+            for i in range(len(head)):
+                h_i = head[i:i+1]
+                t_i = tail[i:i+1]
+                kg_i = KG[i]
+                emb_i = self.enc_ht_single(h_i, t_i, kg_i, visualize)
+                embeddings.append(emb_i)
+            return torch.cat(embeddings, dim=0)
+        else:
+            return self.enc_ht_single(head, tail, KG, visualize)
+
+    def enc_ht_single(self, head, tail, KG, visualize=False):
         if self.args.feat == 'E':
             head_embed = self.ent_kg(head)
             tail_embed = self.ent_kg(tail)

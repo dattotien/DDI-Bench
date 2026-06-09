@@ -29,6 +29,10 @@ parser.add_argument('--out_file_info', type=str, default='', help='extra string 
 parser.add_argument('--seed', type=int, default=1234)
 parser.add_argument('--adversarial', action='store_true')
 parser.add_argument('--adversarial_weight', type=float, default=1, help='the weight of adversarial loss in the total loss.')
+parser.add_argument('--use_pair_kg', action='store_true', help='Use pair-specific KGs instead of a global KG')
+parser.add_argument('--train_kg_npz', type=str, default='', help='Path to train pair-specific KGs .npz file')
+parser.add_argument('--valid_kg_npz', type=str, default='', help='Path to valid pair-specific KGs .npz file')
+parser.add_argument('--test_kg_npz', type=str, default='', help='Path to test pair-specific KGs .npz file')
 
 class options:
     def __init__():
@@ -41,9 +45,16 @@ if __name__ == '__main__':
     dataloader = DataLoader(args)
     eval_ent, eval_rel = dataloader.eval_ent, dataloader.eval_rel
     args.all_ent, args.all_rel, args.eval_rel = dataloader.all_ent, dataloader.all_rel, dataloader.eval_rel
-    KG = dataloader.KG
-    vKG = dataloader.vKG
-    tKG = dataloader.tKG
+    
+    if hasattr(args, 'use_pair_kg') and args.use_pair_kg:
+        KG = None
+        vKG = None
+        tKG = None
+    else:
+        KG = dataloader.KG
+        vKG = dataloader.vKG
+        tKG = dataloader.tKG
+        
     triplets = dataloader.triplets
     train_pos, train_neg = torch.LongTensor(triplets['train']).cuda(), None
     valid_pos, valid_neg = torch.LongTensor(triplets['valid']).cuda(), None
@@ -100,16 +111,25 @@ if __name__ == '__main__':
         model = BaseModel(eval_ent, eval_rel, args)
         best_acc = -1
         for e in range(args.n_epoch):
-            dataloader.shuffle_train()
-            KG = dataloader.KG
-            train_pos = torch.LongTensor(dataloader.train_data).cuda()
-            if args.adversarial:
-                model.train(train_pos, None, train1_pos, None, KG)
+            if hasattr(args, 'use_pair_kg') and args.use_pair_kg:
+                dataloader.shuffle_train_pair_kg()
+                train_pos = torch.LongTensor(dataloader.train_data).cuda()
+                model.train(train_pos, None, None, None, dataloader.train_pair_kgs)
             else:
-                model.train(train_pos, None, None, None, KG)
+                dataloader.shuffle_train()
+                KG = dataloader.KG
+                train_pos = torch.LongTensor(dataloader.train_data).cuda()
+                if args.adversarial:
+                    model.train(train_pos, None, train1_pos, None, KG)
+                else:
+                    model.train(train_pos, None, None, None, KG)
             if (e+1) % args.epoch_per_test == 0:
-                v_f1, v_acc, v_kap, _ = model.evaluate(valid_pos, valid_neg, vKG)
-                t_f1, t_acc, t_kap, t_per_class = model.evaluate(test_pos,  test_neg,  tKG)
+                if hasattr(args, 'use_pair_kg') and args.use_pair_kg:
+                    v_f1, v_acc, v_kap, _ = model.evaluate(valid_pos, valid_neg, dataloader.valid_pair_kgs)
+                    t_f1, t_acc, t_kap, t_per_class = model.evaluate(test_pos,  test_neg,  dataloader.test_pair_kgs)
+                else:
+                    v_f1, v_acc, v_kap, _ = model.evaluate(valid_pos, valid_neg, vKG)
+                    t_f1, t_acc, t_kap, t_per_class = model.evaluate(test_pos,  test_neg,  tKG)
                 # v_f1, v_acc, v_kap = model.evaluate(valid_pos, valid_neg, vKG)
                 # t_f1, t_acc, t_kap = model.evaluate(test_pos,  test_neg,  tKG)
                 model.scheduler.step(v_f1)

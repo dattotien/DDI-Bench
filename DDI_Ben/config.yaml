@@ -257,6 +257,10 @@ models:
       adversarial_weight: 1
       save_model: false
       load_model: false
+      use_pair_kg: false
+      train_kg_npz: "data/train_kg.npz"
+      valid_kg_npz: "data/valid_kg.npz"
+      test_kg_npz: "data/test_kg.npz"
 
   EmerGNN_TWOSIDES:
     enabled: false # ← Change to true to run

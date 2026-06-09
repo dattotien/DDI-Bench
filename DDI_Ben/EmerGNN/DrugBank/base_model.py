@@ -100,20 +100,36 @@ class BaseModel(object):
 
             loss_epoch = 0
             self.model.train()
-            for h, t, r in tqdm(batch_by_size(n_batch, head, tail, label, n_sample=n_train),
-                ncols=100, leave=False, total=len(head)//n_batch+int(len(head)%n_batch>0)):
-                self.model.zero_grad()
-                ht_embed = self.model.enc_ht(h, t, KG)
-                scores = self.model.enc_r(ht_embed)
-                p_score = scores[torch.arange(len(r)).cuda(), r]
-                n_score = scores
-                max_n = torch.max(n_score, 1, keepdim=True)[0]
-                loss = -p_score + max_n + torch.log(torch.sum(torch.exp(n_score - max_n), 1))
-                loss = loss.sum()
+            if hasattr(self.args, 'use_pair_kg') and self.args.use_pair_kg:
+                for h, t, r, batch_kgs in tqdm(batch_by_size(n_batch, head, tail, label, KG, n_sample=n_train),
+                    ncols=100, leave=False, total=len(head)//n_batch+int(len(head)%n_batch>0)):
+                    self.model.zero_grad()
+                    ht_embed = self.model.enc_ht(h, t, batch_kgs)
+                    scores = self.model.enc_r(ht_embed)
+                    p_score = scores[torch.arange(len(r)).cuda(), r]
+                    n_score = scores
+                    max_n = torch.max(n_score, 1, keepdim=True)[0]
+                    loss = -p_score + max_n + torch.log(torch.sum(torch.exp(n_score - max_n), 1))
+                    loss = loss.sum()
 
-                loss.backward()
-                self.optimizer.step()
-                loss_epoch += loss.item()
+                    loss.backward()
+                    self.optimizer.step()
+                    loss_epoch += loss.item()
+            else:
+                for h, t, r in tqdm(batch_by_size(n_batch, head, tail, label, n_sample=n_train),
+                    ncols=100, leave=False, total=len(head)//n_batch+int(len(head)%n_batch>0)):
+                    self.model.zero_grad()
+                    ht_embed = self.model.enc_ht(h, t, KG)
+                    scores = self.model.enc_r(ht_embed)
+                    p_score = scores[torch.arange(len(r)).cuda(), r]
+                    n_score = scores
+                    max_n = torch.max(n_score, 1, keepdim=True)[0]
+                    loss = -p_score + max_n + torch.log(torch.sum(torch.exp(n_score - max_n), 1))
+                    loss = loss.sum()
+
+                    loss.backward()
+                    self.optimizer.step()
+                    loss_epoch += loss.item()
 
 
     def evaluate(self, test_pos, test_neg, KG):
@@ -128,7 +144,11 @@ class BaseModel(object):
             end = min((i+1)*batch_size, len(heads))
             batch_h = heads[start:end].cuda()
             batch_t = tails[start:end].cuda()
-            ht_embed = self.model.enc_ht(batch_h, batch_t, KG)
+            if hasattr(self.args, 'use_pair_kg') and self.args.use_pair_kg:
+                batch_kgs = KG[start:end]
+                ht_embed = self.model.enc_ht(batch_h, batch_t, batch_kgs)
+            else:
+                ht_embed = self.model.enc_ht(batch_h, batch_t, KG)
             scores = self.model.enc_r(ht_embed)
             rela_scores = F.softmax(scores, dim=-1).data.cpu().numpy()
 

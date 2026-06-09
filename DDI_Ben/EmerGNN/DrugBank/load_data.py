@@ -26,9 +26,24 @@ class DataLoader:
         self.process_files_kg(kg_paths, saved_relation2id)
         self.load_ent_id()
 
-        self.shuffle_train()
-        self.vKG = self.load_graph(np.concatenate([self.triplets['train'], self.valid_kg], axis=0))
-        self.tKG = self.load_graph(np.concatenate([self.triplets['train'], self.triplets['valid'], self.test_kg], axis=0))
+        if hasattr(params, 'use_pair_kg') and params.use_pair_kg:
+            self.use_pair_kg = True
+            
+            # Build global KG adjacency list
+            global_adj = defaultdict(list)
+            for h, t, r in self.train_kg:
+                global_adj[h].append((t, r))
+                
+            self.triplets['train'], self.train_pair_kgs = self.load_pair_kgs_from_npz(params.train_kg_npz, global_adj)
+            self.triplets['valid'], self.valid_pair_kgs = self.load_pair_kgs_from_npz(params.valid_kg_npz, global_adj)
+            self.triplets['test'], self.test_pair_kgs = self.load_pair_kgs_from_npz(params.test_kg_npz, global_adj)
+            
+            self.train_data = self.triplets['train']
+        else:
+            self.use_pair_kg = False
+            self.shuffle_train()
+            self.vKG = self.load_graph(np.concatenate([self.triplets['train'], self.valid_kg], axis=0))
+            self.tKG = self.load_graph(np.concatenate([self.triplets['train'], self.triplets['valid'], self.test_kg], axis=0))
 
     def process_files_ddi(self, file_paths, saved_relation2id=None):
         entity2id = {}
@@ -185,3 +200,50 @@ class DataLoader:
             new_triples.append([h, t, r+n_rel])
         new_triples = np.array(new_triples)
         return new_triples
+
+    def load_graph_from_triplets(self, triplets):
+        if len(triplets) == 0:
+            edges = np.empty((0, 3), dtype='int')
+        else:
+            edges = self.double_triple(triplets)
+        idd = np.concatenate([np.expand_dims(np.arange(self.all_ent),1), np.expand_dims(np.arange(self.all_ent),1), 2*self.all_rel*np.ones((self.all_ent, 1))],1)
+        edges = np.concatenate([edges, idd], axis=0)
+        values = np.ones(edges.shape[0])
+        adjs = torch.sparse_coo_tensor(indices=torch.LongTensor(edges).t(), values=torch.FloatTensor(values), size=torch.Size([self.all_ent, self.all_ent, 2*self.all_rel+1]), requires_grad=False).cuda()
+        return adjs
+
+    def load_pair_kgs_from_npz(self, npz_path, global_adj):
+        print(f"Loading and inducing pair-specific KGs from {npz_path}...")
+        data = np.load(npz_path)
+        
+        offsets = data['offsets']
+        nodes = data['nodes']
+        heads = data['heads']
+        tails = data['tails']
+        rels = data['rels']
+        n_nodes = data['n_nodes']
+        
+        num_pairs = len(heads)
+        pair_triplets = np.stack([heads, tails, rels], axis=1)
+        
+        pair_kgs = []
+        for i in range(num_pairs):
+            node_list = nodes[offsets[i] : offsets[i] + n_nodes[i]]
+            sub_triplets = []
+            node_set = set(node_list)
+            for u in node_set:
+                if u in global_adj:
+                    for v, r in global_adj[u]:
+                        if v in node_set:
+                            sub_triplets.append([u, v, r])
+            
+            sub_triplets = np.array(sub_triplets) if len(sub_triplets) > 0 else np.empty((0, 3), dtype='int')
+            pair_kgs.append(self.load_graph_from_triplets(sub_triplets))
+            
+        print(f"Successfully loaded {len(pair_kgs)} KGs.")
+        return pair_triplets, pair_kgs
+
+    def shuffle_train_pair_kg(self):
+        indices = np.random.permutation(len(self.train_data))
+        self.train_data = self.train_data[indices]
+        self.train_pair_kgs = [self.train_pair_kgs[i] for i in indices]
