@@ -214,32 +214,28 @@ class DataLoader:
         print(f"Loading pair-specific KGs from {npz_path}...")
         data = np.load(npz_path)
         
-        offsets = data['offsets']
-        nodes = data['nodes']
+        edge_offsets = data['edge_offsets']
+        edge_heads = data['edge_heads']
+        edge_tails = data['edge_tails']
+        edge_rels = data['edge_rels']
+        
         heads = data['heads']
         tails = data['tails']
         rels = data['rels']
-        n_nodes = data['n_nodes']
         
         num_pairs = len(heads)
         pair_triplets = np.stack([heads, tails, rels], axis=1)
         
         pair_kgs = []
         for i in range(num_pairs):
-            h = heads[i]
-            t = tails[i]
-            r = rels[i]
-            node_list = nodes[offsets[i] : offsets[i] + n_nodes[i]]
-            node_set = set(node_list)
+            start = edge_offsets[i]
+            end = edge_offsets[i+1]
             
-            sub_triplets = []
-            for u in node_set:
-                if u != h:
-                    sub_triplets.append([h, u, r])
-                if u != t:
-                    sub_triplets.append([u, t, r])
+            h_list = edge_heads[start:end]
+            t_list = edge_tails[start:end]
+            r_list = edge_rels[start:end]
             
-            sub_triplets = np.array(sub_triplets) if len(sub_triplets) > 0 else np.empty((0, 3), dtype='int')
+            sub_triplets = np.stack([h_list, t_list, r_list], axis=1) if len(h_list) > 0 else np.empty((0, 3), dtype='int')
             pair_kgs.append(self.load_graph_from_triplets(sub_triplets))
             
         print(f"Successfully loaded {len(pair_kgs)} KGs.")

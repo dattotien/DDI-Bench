@@ -22,13 +22,17 @@ Output:
     ... (mỗi scenario × split 1 file)
 
 Mỗi .npz chứa:
-    offsets     : int32[N_pairs+1]  — ragged array offset, subgraph_i = nodes[offsets[i]:offsets[i+1]]
-    nodes       : uint16[]          — concatenated node IDs (max 34124 < 65535)
-    heads       : uint16[N_pairs]   — head drug id
-    tails       : uint16[N_pairs]   — tail drug id
-    rels        : uint8[N_pairs]    — relation type (< 86)
-    n_nodes     : uint16[N_pairs]   — |V_tight| for each pair (0 if unreachable)
-    meta        : dict              — {L, scenario, split, n_entities, ...}
+    offsets      : int32[N_pairs+1]  — ragged array offset cho các node, subgraph_i = nodes[offsets[i]:offsets[i+1]]
+    nodes        : uint16[]          — các ID node được nối tiếp nhau (concatenated)
+    heads        : uint16[N_pairs]   — ID thuốc đầu (head drug)
+    tails        : uint16[N_pairs]   — ID thuốc cuối (tail drug)
+    rels         : uint8[N_pairs]    — loại quan hệ DDI cần dự đoán (< 86)
+    n_nodes      : uint16[N_pairs]   — số lượng node trong subgraph
+    edge_offsets : int32[N_pairs+1]  — ragged array offset cho các cạnh, edges_i = edge_heads/tails[edge_offsets[i]:edge_offsets[i+1]]
+    edge_heads   : uint16[]          — danh sách nút đầu của các cạnh thực tế
+    edge_tails   : uint16[]          — danh sách nút cuối của các cạnh thực tế
+    edge_rels    : uint8[]           — danh sách quan hệ thực tế tương ứng với các cạnh
+    meta         : dict              — {L, scenario, split, n_entities, ...}
 """
 
 import os
@@ -38,7 +42,6 @@ import time
 import numpy as np
 from scipy import sparse
 from tqdm import tqdm
-import torch
 
 
 # ────────────────────── Config ──────────────────────
@@ -120,63 +123,55 @@ def build_graph_for_split(kg, ddi, scenario, split):
     return triplet_sets
 
 
-# ────────────────────── PPR ──────────────────────
+# ────────────────────── BFS ──────────────────────
 
-def build_ppr_adj(triplets_list, n_entities, device="cuda"):
-    rows_all, cols_all = [], []
-    for triplets in triplets_list:
-        if len(triplets) == 0:
-            continue
-        h = triplets[:, 0].astype(np.int64)
-        t = triplets[:, 1].astype(np.int64)
-        mask = h != t
-        rows_all.extend([h[mask], t[mask]])
-        cols_all.extend([t[mask], h[mask]])
-    
-    rows = np.concatenate(rows_all)
-    cols = np.concatenate(cols_all)
+def bfs_distances(sp_csr, source, exclude_node, max_depth):
+    """BFS trả về int8 distance array. Unreachable = max_depth+1.
+    Loại bỏ cạnh trực tiếp nối giữa source và exclude_node ở bước đầu tiên.
+    """
+    n = sp_csr.shape[0]
+    UNREACH = max_depth + 1
+    dist = np.full(n, UNREACH, dtype=np.int8)
+    dist[source] = 0
+    frontier = np.array([source], dtype=np.int64)
+    for d in range(1, max_depth + 1):
+        if len(frontier) == 0:
+            break
+        # Lấy tất cả neighbor của frontier nodes qua CSR indexing
+        nbrs = sp_csr[frontier].indices
+        if len(nbrs) == 0:
+            break
+        if d == 1:
+            nbrs = nbrs[nbrs != exclude_node]
+        new_mask = dist[nbrs] > d
+        new_nodes = np.unique(nbrs[new_mask])
+        if len(new_nodes) == 0:
+            break
+        dist[new_nodes] = d
+        frontier = new_nodes
+    return dist
 
-    src = torch.tensor(cols, dtype=torch.long, device=device)
-    dst = torch.tensor(rows, dtype=torch.long, device=device)
-    edges = torch.stack([dst, src])
 
-    deg = torch.zeros(n_entities, device=device)
-    deg.scatter_add_(0, src, torch.ones_like(src, dtype=torch.float))
-    deg_inv = 1.0 / deg.clamp(min=1)
-    norm_values = deg_inv[src]
+def extract_tight_subgraph(sp_csr, h, t, L):
+    """Trả về sorted array of node IDs in V_tight(h, t, L).
 
-    adj = torch.sparse_coo_tensor(
-        edges, norm_values, size=(n_entities, n_entities)
-    ).coalesce()
-    
-    return adj
+    V_tight = { j : d(h,j) + d(j,t) ≤ L }
 
-@torch.no_grad()
-def extract_ppr_subgraph(adj, h, t, n_entities, ppr_k=200, ppr_alpha=0.15, ppr_iters=10, device="cuda"):
-    s_head = torch.zeros((n_entities, 1), device=device)
-    s_head[h, 0] = 1.0
-    p_head = s_head.clone()
+    Nếu d(h,t) > L → return empty array (cặp unreachable).
+    """
+    d_h = bfs_distances(sp_csr, h, t, L)
+    d_t = bfs_distances(sp_csr, t, h, L)
+    # int8 + int8 → int16 (tránh overflow)
+    tight_mask = (d_h.astype(np.int16) + d_t.astype(np.int16)) <= L
+    nodes = np.where(tight_mask)[0]
+    return nodes  # đã sorted (np.where trả sorted)
 
-    s_tail = torch.zeros((n_entities, 1), device=device)
-    s_tail[t, 0] = 1.0
-    p_tail = s_tail.clone()
-
-    for _ in range(ppr_iters):
-        p_head = (1 - ppr_alpha) * s_head + ppr_alpha * torch.sparse.mm(adj, p_head)
-        p_tail = (1 - ppr_alpha) * s_tail + ppr_alpha * torch.sparse.mm(adj, p_tail)
-
-    p_joint = (p_head * p_tail).squeeze(1)
-    p_joint[h] = float('inf')
-    p_joint[t] = float('inf')
-
-    k = min(ppr_k, n_entities)
-    _, topk_nodes = torch.topk(p_joint, k)
-
-    return np.sort(topk_nodes.cpu().numpy().astype(np.int64))
 
 # ────────────────────── Main extraction ──────────────────────
 
-def extract_scenario_split(kg, ddi, scenario, split, ppr_k, n_entities, out_dir, dtype):
+def extract_scenario_split(kg, ddi, scenario, split, L, n_entities, out_dir, dtype):
+    """Extract + save tight enclosing subgraphs cho 1 (scenario, split)."""
+
     pairs = ddi[scenario][split]
     n_pairs = len(pairs)
     if n_pairs == 0:
@@ -185,11 +180,19 @@ def extract_scenario_split(kg, ddi, scenario, split, ppr_k, n_entities, out_dir,
 
     # Build graph
     triplet_sets = build_graph_for_split(kg, ddi, scenario, split)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    adj = build_ppr_adj(triplet_sets, n_entities, device=device)
+    adj = build_undirected_csr(triplet_sets, n_entities)
 
-    print(f'  {scenario}/{split}: {n_pairs:,} pairs, graph {adj._nnz():,} edges')
+    # Build global adjacency list for extracting induced subgraph edges
+    adj_list = [[] for _ in range(n_entities)]
+    for triplets in triplet_sets:
+        for h_edge, t_edge, r_edge in triplets:
+            h_edge, t_edge, r_edge = int(h_edge), int(t_edge), int(r_edge)
+            if h_edge != t_edge:
+                adj_list[h_edge].append((t_edge, r_edge))
 
+    print(f'  {scenario}/{split}: {n_pairs:,} pairs, graph {adj.nnz//2:,} edges')
+
+    # Allocate ragged arrays
     all_nodes = []
     offsets = [0]
     n_nodes_arr = np.empty(n_pairs, dtype=np.uint16)
@@ -198,15 +201,19 @@ def extract_scenario_split(kg, ddi, scenario, split, ppr_k, n_entities, out_dir,
     rels = np.empty(n_pairs, dtype=np.uint8)
     reachable = 0
 
+    all_edge_heads = []
+    all_edge_tails = []
+    all_edge_rels = []
+    edge_offsets = [0]
+
     t0 = time.time()
     for i, (h, t, r) in enumerate(tqdm(pairs, desc=f'    {scenario}/{split}', ncols=80)):
         h, t, r = int(h), int(t), int(r)
-        
-        # TRÍCH XUẤT BẰNG PPR
-        nodes = extract_ppr_subgraph(adj, h, t, n_entities, ppr_k=ppr_k, device=device)
+        nodes = extract_tight_subgraph(adj, h, t, L)
         n_sub = len(nodes)
 
-        if n_sub <= 2:
+        # Đảm bảo h, t luôn có mặt (kể cả nếu unreachable — để seed embedding)
+        if n_sub == 0:
             nodes = np.array([h, t], dtype=np.int64)
             n_sub = 2
         else:
@@ -219,26 +226,56 @@ def extract_scenario_split(kg, ddi, scenario, split, ppr_k, n_entities, out_dir,
         tails[i] = t
         rels[i] = r
 
+        # Trích xuất các cạnh thực tế kết nối các node trong subgraph (induced subgraph)
+        sub_edges_h = []
+        sub_edges_t = []
+        sub_edges_r = []
+        node_set_lookup = set(nodes)
+        for u in nodes:
+            for v, r_edge in adj_list[u]:
+                if v in node_set_lookup:
+                    # Loại bỏ cạnh đích giữa h và t để tránh Target Leakage
+                    if (u == h and v == t) or (u == t and v == h):
+                        continue
+                    sub_edges_h.append(u)
+                    sub_edges_t.append(v)
+                    sub_edges_r.append(r_edge)
+
+        n_edges = len(sub_edges_h)
+        all_edge_heads.extend(sub_edges_h)
+        all_edge_tails.extend(sub_edges_t)
+        all_edge_rels.extend(sub_edges_r)
+        edge_offsets.append(edge_offsets[-1] + n_edges)
+
     elapsed = time.time() - t0
+
+    # Concatenate ragged arrays
     all_nodes_cat = np.concatenate(all_nodes)
     offsets_arr = np.array(offsets, dtype=np.int32)
+    edge_offsets_arr = np.array(edge_offsets, dtype=np.int32)
+    edge_heads_arr = np.array(all_edge_heads, dtype=np.uint16)
+    edge_tails_arr = np.array(all_edge_tails, dtype=np.uint16)
+    edge_rels_arr = np.array(all_edge_rels, dtype=np.uint8)
 
+    # Stats
     usable_sizes = n_nodes_arr[n_nodes_arr > 2]
     med = int(np.median(usable_sizes)) if len(usable_sizes) > 0 else 0
     p90 = int(np.percentile(usable_sizes, 90)) if len(usable_sizes) > 0 else 0
     reach_pct = reachable / n_pairs * 100
 
     print(f'    Done {elapsed:.1f}s | reachable={reachable}/{n_pairs} ({reach_pct:.1f}%)')
-    print(f'    |V_ppr|: median={med}, p90={p90}, total_nodes_stored={len(all_nodes_cat):,}')
+    print(f'    |V_tight|: median={med}, p90={p90}, total_nodes_stored={len(all_nodes_cat):,}')
 
+    # Memory estimation
     node_bytes = all_nodes_cat.nbytes
-    overhead_bytes = offsets_arr.nbytes + n_nodes_arr.nbytes + heads.nbytes + tails.nbytes + rels.nbytes
+    overhead_bytes = offsets_arr.nbytes + n_nodes_arr.nbytes + heads.nbytes + tails.nbytes + rels.nbytes + edge_offsets_arr.nbytes + edge_heads_arr.nbytes + edge_tails_arr.nbytes + edge_rels_arr.nbytes
     total_mb = (node_bytes + overhead_bytes) / 1024 / 1024
     print(f'    Memory: nodes={node_bytes/1024/1024:.1f}MB + overhead={overhead_bytes/1024:.1f}KB = {total_mb:.1f}MB')
 
-    out_path = os.path.join(out_dir, f'{scenario}_{split}_K{ppr_k}.npz')
+    # Save
+    out_path = os.path.join(out_dir, f'{scenario}_{split}_L{L}.npz')
     meta = {
-        'K': ppr_k,
+        'L': L,
         'scenario': scenario,
         'split': split,
         'n_entities': n_entities,
@@ -250,15 +287,28 @@ def extract_scenario_split(kg, ddi, scenario, split, ppr_k, n_entities, out_dir,
     }
 
     if dtype == 'float16':
+        # Encode node IDs as float16 — lossless for integers ≤ 2048,
+        # nhưng DrugBank có n_entities=34124 → float16 mất precision ở vùng cao.
+        # Dùng uint16 an toàn hơn (max 65535 >> 34124).
         print(f'    Note: float16 lossy cho node ID > 2048. Dùng uint16 thay thế.')
 
     np.savez_compressed(
-        out_path, offsets=offsets_arr, nodes=all_nodes_cat, heads=heads,
-        tails=tails, rels=rels, n_nodes=n_nodes_arr, meta=json.dumps(meta)
+        out_path,
+        offsets=offsets_arr,
+        nodes=all_nodes_cat,  # uint16
+        heads=heads,          # uint16
+        tails=tails,          # uint16
+        rels=rels,            # uint8
+        edge_offsets=edge_offsets_arr,
+        edge_heads=edge_heads_arr,
+        edge_tails=edge_tails_arr,
+        edge_rels=edge_rels_arr,
+        meta=json.dumps(meta),
     )
     file_size = os.path.getsize(out_path)
     print(f'    Saved: {out_path} ({file_size/1024/1024:.2f} MB compressed)')
     return meta
+
 
 # ────────────────────── CLI ──────────────────────
 
@@ -285,7 +335,7 @@ Examples:
                         choices=ALL_SCENARIOS, help='Scenarios to process')
     parser.add_argument('--splits', nargs='+', default=ALL_SPLITS,
                         choices=ALL_SPLITS, help='Splits to process')
-    parser.add_argument('--K', type=int, default=100,
+    parser.add_argument('--L', type=int, default=3,
                         help='Max walk length (= EmerGNN args.length)')
     parser.add_argument('--dtype', default='uint16', choices=['uint16', 'int32', 'float16'],
                         help='Storage dtype for node IDs (uint16=2B/node, int32=4B, float16=2B but lossy)')
@@ -297,7 +347,7 @@ Examples:
     os.makedirs(out_dir, exist_ok=True)
 
     print(f'=== Extract Tight Enclosing Subgraphs ===')
-    print(f'K = {args.K}')
+    print(f'L = {args.L}')
     print(f'Scenarios: {args.scenarios}')
     print(f'Splits:    {args.splits}')
     print(f'Dtype:     {args.dtype}')
@@ -315,7 +365,7 @@ Examples:
     all_meta = []
     for sc in args.scenarios:
         for sp in args.splits:
-            meta = extract_scenario_split(kg, ddi, sc, sp, args.K, n_entities, out_dir, args.dtype)
+            meta = extract_scenario_split(kg, ddi, sc, sp, args.L, n_entities, out_dir, args.dtype)
             if meta:
                 all_meta.append(meta)
             print()
@@ -332,7 +382,8 @@ Examples:
               f'{m["median_subgraph_size"]:>10,} {m["p90_subgraph_size"]:>10,}')
 
     total_files = len(all_meta)
-    total_size = sum(os.path.getsize(os.path.join(out_dir, f'{m["scenario"]}_{m["split"]}_K{m["K"]}.npz')) for m in all_meta)
+    total_size = sum(os.path.getsize(os.path.join(out_dir, f'{m["scenario"]}_{m["split"]}_L{m["L"]}.npz'))
+                     for m in all_meta)
     print(f'\n{total_files} files, total {total_size/1024/1024:.1f} MB compressed')
     print(f'Saved to: {out_dir}/')
 
@@ -360,6 +411,10 @@ class SubgraphLoader:
         self.tails = data['tails']          # uint16[N]
         self.rels = data['rels']            # uint8[N]
         self.n_nodes = data['n_nodes']      # uint16[N]
+        self.edge_offsets = data['edge_offsets'] # int32[N+1]
+        self.edge_heads = data['edge_heads']     # uint16[]
+        self.edge_tails = data['edge_tails']     # uint16[]
+        self.edge_rels = data['edge_rels']       # uint8[]
         self.meta = json.loads(str(data['meta']))
         self.n_pairs = len(self.heads)
         self.n_entities = self.meta['n_entities']
@@ -369,6 +424,16 @@ class SubgraphLoader:
         start = self.offsets[pair_idx]
         end = self.offsets[pair_idx + 1]
         return self.nodes[start:end]
+
+    def get_edges(self, pair_idx):
+        """Trả về (heads, tails, rels) của các cạnh thực tế cho pair_idx."""
+        start = self.edge_offsets[pair_idx]
+        end = self.edge_offsets[pair_idx + 1]
+        return (
+            self.edge_heads[start:end],
+            self.edge_tails[start:end],
+            self.edge_rels[start:end]
+        )
 
     def get_pair(self, pair_idx):
         """Trả về (head, tail, rel)."""
@@ -403,7 +468,7 @@ class SubgraphLoader:
 
     def __repr__(self):
         return (f"SubgraphLoader({self.meta['scenario']}/{self.meta['split']}, "
-                f"K={self.meta['K']}, {self.n_pairs:,} pairs, "
+                f"L={self.meta['L']}, {self.n_pairs:,} pairs, "
                 f"med |V|={self.meta['median_subgraph_size']})")
 
 
