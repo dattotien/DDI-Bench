@@ -59,7 +59,7 @@ class EmerGNN(nn.Module):
             for i in range(len(head)):
                 h_i = head[i:i+1]
                 t_i = tail[i:i+1]
-                kg_i = KG[i]
+                kg_i = KG[i].cuda()
                 emb_i = self.enc_ht_single(h_i, t_i, kg_i, visualize)
                 embeddings.append(emb_i)
             return torch.cat(embeddings, dim=0)
@@ -76,7 +76,7 @@ class EmerGNN(nn.Module):
         n_ent = self.all_ent
        
         # propagate from u to v
-        hiddens = torch.FloatTensor(np.zeros((n_ent, len(head), self.n_dim))).cuda()
+        hiddens = torch.zeros((n_ent, len(head), self.n_dim), device='cuda')
         hiddens[head, torch.arange(len(head)).cuda()] = head_embed
         ht_embed = torch.cat([head_embed, tail_embed], dim=-1)
         for l in range(self.L):
@@ -94,7 +94,7 @@ class EmerGNN(nn.Module):
         tail_hid = hiddens.view(n_ent, len(tail), -1)[tail, torch.arange(len(tail))]
         
         # propagate from v to u
-        hiddens = torch.FloatTensor(np.zeros((n_ent, len(head), self.n_dim))).cuda()
+        hiddens = torch.zeros((n_ent, len(head), self.n_dim), device='cuda')
         hiddens[tail, torch.arange(len(tail)).cuda()] = tail_embed
         for l in range(self.L):
             hiddens = hiddens.view(n_ent, -1)
