@@ -204,9 +204,12 @@ class DataLoader:
             edges = np.empty((0, 3), dtype='int')
         else:
             edges = self.double_triple(triplets)
-        idd = np.concatenate([np.expand_dims(np.arange(self.all_ent),1), np.expand_dims(np.arange(self.all_ent),1), 2*self.all_rel*np.ones((self.all_ent, 1))],1)
-        edges = np.concatenate([edges, idd], axis=0)
-        values = np.ones(edges.shape[0])
+            
+        if not hasattr(self, 'idd'):
+            self.idd = np.concatenate([np.expand_dims(np.arange(self.all_ent),1), np.expand_dims(np.arange(self.all_ent),1), 2*self.all_rel*np.ones((self.all_ent, 1))],1)
+            
+        edges = np.concatenate([edges, self.idd], axis=0)
+        values = np.ones(edges.shape[0], dtype='float32')
         adjs = torch.sparse_coo_tensor(indices=torch.LongTensor(edges).t(), values=torch.FloatTensor(values), size=torch.Size([self.all_ent, self.all_ent, 2*self.all_rel+1]), requires_grad=False)
         return adjs
 
@@ -214,29 +217,12 @@ class DataLoader:
         print(f"Loading pair-specific KGs from {npz_path}...")
         data = np.load(npz_path)
         
-        edge_offsets = data['edge_offsets']
-        edge_heads = data['edge_heads']
-        edge_tails = data['edge_tails']
-        edge_rels = data['edge_rels']
-        
         heads = data['heads']
         tails = data['tails']
         rels = data['rels']
         
-        num_pairs = len(heads)
         pair_triplets = np.stack([heads, tails, rels], axis=1)
-        
-        pair_kgs = []
-        for i in range(num_pairs):
-            start = edge_offsets[i]
-            end = edge_offsets[i+1]
-            
-            h_list = edge_heads[start:end]
-            t_list = edge_tails[start:end]
-            r_list = edge_rels[start:end]
-            
-            sub_triplets = np.stack([h_list, t_list, r_list], axis=1) if len(h_list) > 0 else np.empty((0, 3), dtype='int')
-            pair_kgs.append(self.load_graph_from_triplets(sub_triplets))
+        pair_kgs = PairKGs(data, self.all_ent, self.all_rel, self)
             
         print(f"Successfully loaded {len(pair_kgs)} KGs.")
         return pair_triplets, pair_kgs
@@ -244,4 +230,40 @@ class DataLoader:
     def shuffle_train_pair_kg(self):
         indices = np.random.permutation(len(self.train_data))
         self.train_data = self.train_data[indices]
-        self.train_pair_kgs = [self.train_pair_kgs[i] for i in indices]
+        if hasattr(self.train_pair_kgs, 'shuffle'):
+            self.train_pair_kgs.shuffle(indices)
+        else:
+            self.train_pair_kgs = [self.train_pair_kgs[i] for i in indices]
+
+class PairKGs:
+    def __init__(self, data, all_ent, all_rel, dataloader):
+        self.edge_offsets = data['edge_offsets'][:]
+        self.edge_heads = data['edge_heads'][:]
+        self.edge_tails = data['edge_tails'][:]
+        self.edge_rels = data['edge_rels'][:]
+        self.all_ent = all_ent
+        self.all_rel = all_rel
+        self.dataloader = dataloader
+        self.indices = np.arange(len(self.edge_offsets) - 1)
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return [self._get_single(self.indices[i]) for i in range(*idx.indices(len(self)))]
+        elif isinstance(idx, (list, np.ndarray, tuple)):
+            return [self._get_single(self.indices[i]) for i in idx]
+        return self._get_single(self.indices[idx])
+
+    def _get_single(self, i):
+        start = self.edge_offsets[i]
+        end = self.edge_offsets[i+1]
+        h_list = self.edge_heads[start:end]
+        t_list = self.edge_tails[start:end]
+        r_list = self.edge_rels[start:end]
+        sub_triplets = np.stack([h_list, t_list, r_list], axis=1) if len(h_list) > 0 else np.empty((0, 3), dtype='int')
+        return self.dataloader.load_graph_from_triplets(sub_triplets)
+
+    def shuffle(self, new_indices):
+        self.indices = self.indices[new_indices]
