@@ -261,6 +261,9 @@ models:
       train_kg_npz: "data/train_kg.npz"
       valid_kg_npz: "data/valid_kg.npz"
       test_kg_npz: "data/test_kg.npz"
+      use_dynamic_subgraph_sampling: false
+      splitter_ratio: 0.8
+      splitter_scenario: "S1"
 
   EmerGNN_TWOSIDES:
     enabled: false # ← Change to true to run

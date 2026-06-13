@@ -24,7 +24,30 @@ class DataLoader:
         
         self.process_files_ddi(ddi_paths, saved_relation2id)
 
-        if hasattr(params, 'use_pair_kg') and params.use_pair_kg:
+        if hasattr(params, 'use_dynamic_subgraph_sampling') and params.use_dynamic_subgraph_sampling:
+            self.use_dynamic_subgraph_sampling = True
+            self.process_files_kg(kg_paths, saved_relation2id)
+            self.load_ent_id()
+            self.use_pair_kg = True
+            
+            if hasattr(params, 'valid_kg_npz') and params.valid_kg_npz and os.path.exists(params.valid_kg_npz):
+                _, self.valid_pair_kgs = self.load_pair_kgs_from_npz(params.valid_kg_npz)
+            else:
+                self.valid_pair_kgs = DynamicPairKGs(
+                    self.triplets['valid'], self, params.length,
+                    base_kg_triplets=self.valid_kg, ddi_triplets=self.triplets['train']
+                )
+                
+            if hasattr(params, 'test_kg_npz') and params.test_kg_npz and os.path.exists(params.test_kg_npz):
+                _, self.test_pair_kgs = self.load_pair_kgs_from_npz(params.test_kg_npz)
+            else:
+                self.test_pair_kgs = DynamicPairKGs(
+                    self.triplets['test'], self, params.length,
+                    base_kg_triplets=self.test_kg,
+                    ddi_triplets=np.concatenate([self.triplets['train'], self.triplets['valid']], axis=0)
+                )
+            self.train_data = self.triplets['train']
+        elif hasattr(params, 'use_pair_kg') and params.use_pair_kg:
             self.use_pair_kg = True
             self.all_ent = self.eval_ent
             self.all_rel = self.eval_rel
@@ -235,6 +258,61 @@ class DataLoader:
         else:
             self.train_pair_kgs = [self.train_pair_kgs[i] for i in indices]
 
+    def bfs_distances(self, sp_csr, source, exclude_node, max_depth):
+        UNREACH = max_depth + 1
+        dist = np.full(self.all_ent, UNREACH, dtype=np.int8)
+        dist[source] = 0
+        frontier = np.array([source], dtype=np.int64)
+        for d in range(1, max_depth + 1):
+            if len(frontier) == 0:
+                break
+            nbrs = sp_csr[frontier].indices
+            if len(nbrs) == 0:
+                break
+            if d == 1:
+                nbrs = nbrs[nbrs != exclude_node]
+            new_mask = dist[nbrs] > d
+            new_nodes = np.unique(nbrs[new_mask])
+            if len(new_nodes) == 0:
+                break
+            dist[new_nodes] = d
+            frontier = new_nodes
+        return dist
+
+    def extract_tight_subgraph(self, sp_csr, h, t, L):
+        d_h = self.bfs_distances(sp_csr, h, t, L)
+        d_t = self.bfs_distances(sp_csr, t, h, L)
+        tight_mask = (d_h.astype(np.int16) + d_t.astype(np.int16)) <= L
+        nodes = np.where(tight_mask)[0]
+        return nodes
+
+    def get_dynamic_batch_kgs(self, batch_h, batch_t, L):
+        """Dynamically extract subgraphs for a batch on the fly"""
+        batch_kgs = []
+        for i in range(len(batch_h)):
+            h, t = int(batch_h[i]), int(batch_t[i])
+            nodes = self.extract_tight_subgraph(self.epoch_adj, h, t, L)
+            if len(nodes) == 0:
+                nodes = np.array([h, t], dtype=np.int64)
+                
+            sub_edges_h = []
+            sub_edges_t = []
+            sub_edges_r = []
+            node_set_lookup = set(nodes)
+            for u in nodes:
+                for v, r_edge in self.epoch_adj_list[u]:
+                    if v in node_set_lookup:
+                        # Avoid target leakage
+                        if (u == h and v == t) or (u == t and v == h):
+                            continue
+                        sub_edges_h.append(u)
+                        sub_edges_t.append(v)
+                        sub_edges_r.append(r_edge)
+                        
+            sub_triplets = np.stack([sub_edges_h, sub_edges_t, sub_edges_r], axis=1) if len(sub_edges_h) > 0 else np.empty((0, 3), dtype='int')
+            batch_kgs.append(self.load_graph_from_triplets(sub_triplets))
+        return batch_kgs
+
 class PairKGs:
     def __init__(self, data, all_ent, all_rel, dataloader):
         self.edge_offsets = data['edge_offsets'][:]
@@ -264,6 +342,104 @@ class PairKGs:
         r_list = self.edge_rels[start:end]
         sub_triplets = np.stack([h_list, t_list, r_list], axis=1) if len(h_list) > 0 else np.empty((0, 3), dtype='int')
         return self.dataloader.load_graph_from_triplets(sub_triplets)
+
+    def shuffle(self, new_indices):
+        self.indices = self.indices[new_indices]
+
+class DynamicPairKGs:
+    def __init__(self, triplets, dataloader, L, base_kg_triplets, ddi_triplets):
+        self.triplets = triplets
+        self.dataloader = dataloader
+        self.L = L
+        self.indices = np.arange(len(triplets))
+        
+        # Build CSR and adjacency list for this split
+        from scipy import sparse
+        n_nodes = dataloader.all_ent
+        
+        rows_all, cols_all = [], []
+        for kg_trips in [base_kg_triplets, ddi_triplets]:
+            if len(kg_trips) == 0:
+                continue
+            h = kg_trips[:, 0].astype(np.int64)
+            t = kg_trips[:, 1].astype(np.int64)
+            mask = h != t
+            rows_all.extend([h[mask], t[mask]])
+            cols_all.extend([t[mask], h[mask]])
+            
+        if len(rows_all) > 0:
+            rows = np.concatenate(rows_all)
+            cols = np.concatenate(cols_all)
+            sp = sparse.csr_matrix(
+                (np.ones(len(rows), dtype=np.int8), (rows, cols)),
+                shape=(n_nodes, n_nodes),
+            )
+            sp.sum_duplicates()
+            sp.data[:] = 1
+            self.adj = sp
+        else:
+            self.adj = sparse.csr_matrix((n_nodes, n_nodes), dtype=np.int8)
+            
+        adj_list = [[] for _ in range(n_nodes)]
+        for kg_trips in [base_kg_triplets, ddi_triplets]:
+            if len(kg_trips) == 0:
+                continue
+            for h_edge, t_edge, r_edge in kg_trips:
+                h_edge, t_edge, r_edge = int(h_edge), int(t_edge), int(r_edge)
+                if h_edge != t_edge:
+                    adj_list[h_edge].append((t_edge, r_edge))
+        self.adj_list = adj_list
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            start, stop, step = idx.indices(len(self))
+            batch_indices = self.indices[start:stop:step]
+            batch_h = self.triplets[batch_indices, 0]
+            batch_t = self.triplets[batch_indices, 1]
+            return self._get_batch(batch_h, batch_t)
+        elif isinstance(idx, (list, np.ndarray, tuple)):
+            batch_indices = self.indices[idx]
+            batch_h = self.triplets[batch_indices, 0]
+            batch_t = self.triplets[batch_indices, 1]
+            return self._get_batch(batch_h, batch_t)
+        else:
+            real_idx = self.indices[idx]
+            h = self.triplets[real_idx, 0]
+            t = self.triplets[real_idx, 1]
+            return self._get_batch([h], [t])[0]
+
+    def _get_batch(self, batch_h, batch_t):
+        batch_kgs = []
+        for i in range(len(batch_h)):
+            h, t = int(batch_h[i]), int(batch_t[i])
+            # extract subgraph nodes
+            d_h = self.dataloader.bfs_distances(self.adj, h, t, self.L)
+            d_t = self.dataloader.bfs_distances(self.adj, t, h, self.L)
+            tight_mask = (d_h.astype(np.int16) + d_t.astype(np.int16)) <= self.L
+            nodes = np.where(tight_mask)[0]
+            if len(nodes) == 0:
+                nodes = np.array([h, t], dtype=np.int64)
+                
+            sub_edges_h = []
+            sub_edges_t = []
+            sub_edges_r = []
+            node_set_lookup = set(nodes)
+            for u in nodes:
+                for v, r_edge in self.adj_list[u]:
+                    if v in node_set_lookup:
+                        # Avoid target leakage
+                        if (u == h and v == t) or (u == t and v == h):
+                            continue
+                        sub_edges_h.append(u)
+                        sub_edges_t.append(v)
+                        sub_edges_r.append(r_edge)
+                        
+            sub_triplets = np.stack([sub_edges_h, sub_edges_t, sub_edges_r], axis=1) if len(sub_edges_h) > 0 else np.empty((0, 3), dtype='int')
+            batch_kgs.append(self.dataloader.load_graph_from_triplets(sub_triplets))
+        return batch_kgs
 
     def shuffle(self, new_indices):
         self.indices = self.indices[new_indices]

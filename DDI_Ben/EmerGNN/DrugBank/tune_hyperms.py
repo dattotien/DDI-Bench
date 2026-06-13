@@ -1,8 +1,11 @@
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 import argparse
 import torch
 import random
 from load_data import DataLoader
+from emergnn_fact_splitter import EmerGNNFactSplitter
 
 from base_model import BaseModel
 import numpy as np
@@ -26,6 +29,9 @@ parser.add_argument('--use_pair_kg', action='store_true', help='Use pair-specifi
 parser.add_argument('--train_kg_npz', type=str, default='', help='Path to train pair-specific KGs .npz file')
 parser.add_argument('--valid_kg_npz', type=str, default='', help='Path to valid pair-specific KGs .npz file')
 parser.add_argument('--test_kg_npz', type=str, default='', help='Path to test pair-specific KGs .npz file')
+parser.add_argument('--use_dynamic_subgraph_sampling', action='store_true', help='Use dynamic subgraph sampling')
+parser.add_argument('--splitter_ratio', type=float, default=0.8, help='Splitter ratio for facts/labels')
+parser.add_argument('--splitter_scenario', type=str, default='S1', help='Scenario for the fact splitter (S0/S1/S2)')
 
 class options:
     def __init__():
@@ -33,6 +39,8 @@ class options:
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    if hasattr(args, 'use_dynamic_subgraph_sampling') and args.use_dynamic_subgraph_sampling:
+        args.use_pair_kg = True
     args.relation_class = {'Pharmacokinetic interactions - Absorption interactions': [2, 12, 17, 61, 66],
                 'Pharmacokinetic interactions - Distribution interacitons': [42, 44, 72, 74],
                 'Pharmacokinetic interactions - Metabolic interactions': [3, 10, 46],
@@ -75,13 +83,39 @@ if __name__ == '__main__':
         args.feat = params['feat']
 
         model = BaseModel(eval_ent, eval_rel, args)
+        
+        if hasattr(args, 'use_dynamic_subgraph_sampling') and args.use_dynamic_subgraph_sampling:
+            train_csv_path = os.path.join(dataloader.task_dir, 'data/{}/{}_ddi.txt'.format(args.dataset, 'train'))
+            node2id_path = os.path.join(dataloader.task_dir, 'data/node2id.json')
+            splitter = EmerGNNFactSplitter(
+                train_csv_path=train_csv_path,
+                node2id_path=node2id_path,
+                kg_triplets=dataloader.train_kg,
+                scenario=args.splitter_scenario,
+                ratio=args.splitter_ratio,
+                seed=args.seed
+            )
+            
         best_acc = -1
         early_stop = 0
         try:
             for e in range(args.n_epoch):
                 if early_stop > 3:
                     break
-                if hasattr(args, 'use_pair_kg') and args.use_pair_kg:
+                if hasattr(args, 'use_dynamic_subgraph_sampling') and args.use_dynamic_subgraph_sampling:
+                    fact_triplets, label_indices = splitter.shuffle(e)
+                    epoch_train_triplets = splitter.train_triplets[label_indices]
+                    from load_data import DynamicPairKGs
+                    dataloader.train_pair_kgs = DynamicPairKGs(
+                        epoch_train_triplets, dataloader, args.length,
+                        base_kg_triplets=dataloader.train_kg,
+                        ddi_triplets=fact_triplets
+                    )
+                    dataloader.train_data = epoch_train_triplets
+                    dataloader.shuffle_train_pair_kg()
+                    train_pos = torch.LongTensor(dataloader.train_data).cuda()
+                    model.train(train_pos, None, None, None, dataloader.train_pair_kgs)
+                elif hasattr(args, 'use_pair_kg') and args.use_pair_kg:
                     dataloader.shuffle_train_pair_kg()
                     train_pos = torch.LongTensor(dataloader.train_data).cuda()
                     model.train(train_pos, None, None, None, dataloader.train_pair_kgs)
