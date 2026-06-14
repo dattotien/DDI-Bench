@@ -7,6 +7,7 @@ import json
 
 class DataLoader:
     def __init__(self, params, saved_relation2id=None):
+        self.params = params
         self.task_dir = params.task_dir
         self.dataset = params.dataset
 
@@ -32,12 +33,12 @@ class DataLoader:
             self.use_pair_kg = True
             
             self.valid_pair_kgs = DynamicPairKGs(
-                self.triplets['valid'], self, params.length,
+                self.triplets['valid'], self, getattr(params, 'length', 3),
                 base_kg_triplets=self.valid_kg, ddi_triplets=self.triplets['train']
             )
                 
             self.test_pair_kgs = DynamicPairKGs(
-                self.triplets['test'], self, params.length,
+                self.triplets['test'], self, getattr(params, 'length', 3),
                 base_kg_triplets=self.test_kg,
                 ddi_triplets=np.concatenate([self.triplets['train'], self.triplets['valid']], axis=0)
             )
@@ -352,8 +353,14 @@ class DynamicPairKGs:
     def __init__(self, triplets, dataloader, L, base_kg_triplets, ddi_triplets):
         self.triplets = triplets
         self.dataloader = dataloader
-        self.L = L
+        self._L = L
         self.indices = np.arange(len(triplets))
+
+    @property
+    def L(self):
+        if hasattr(self.dataloader, 'params') and hasattr(self.dataloader.params, 'length'):
+            return self.dataloader.params.length
+        return self._L
         
         # Build CSR and adjacency list for this split
         from scipy import sparse
