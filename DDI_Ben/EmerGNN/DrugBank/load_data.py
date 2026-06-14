@@ -356,12 +356,6 @@ class DynamicPairKGs:
         self._L = L
         self.indices = np.arange(len(triplets))
 
-    @property
-    def L(self):
-        if hasattr(self.dataloader, 'params') and hasattr(self.dataloader.params, 'length'):
-            return self.dataloader.params.length
-        return self._L
-        
         # Build CSR and adjacency list for this split
         from scipy import sparse
         n_nodes = dataloader.all_ent
@@ -399,6 +393,12 @@ class DynamicPairKGs:
                     adj_list[h_edge].append((t_edge, r_edge))
         self.adj_list = adj_list
 
+    @property
+    def L(self):
+        if hasattr(self.dataloader, 'params') and hasattr(self.dataloader.params, 'length'):
+            return self.dataloader.params.length
+        return self._L
+
     def __len__(self):
         return len(self.indices)
 
@@ -422,12 +422,13 @@ class DynamicPairKGs:
 
     def _get_batch(self, batch_h, batch_t):
         batch_kgs = []
+        L = self.L
         for i in range(len(batch_h)):
             h, t = int(batch_h[i]), int(batch_t[i])
             # extract subgraph nodes
-            d_h = self.dataloader.bfs_distances(self.adj, h, t, self.L)
-            d_t = self.dataloader.bfs_distances(self.adj, t, h, self.L)
-            tight_mask = (d_h.astype(np.int16) + d_t.astype(np.int16)) <= self.L
+            d_h = self.dataloader.bfs_distances(self.adj, h, t, L)
+            d_t = self.dataloader.bfs_distances(self.adj, t, h, L)
+            tight_mask = (d_h.astype(np.int16) + d_t.astype(np.int16)) <= L
             nodes = np.where(tight_mask)[0]
             if len(nodes) == 0:
                 nodes = np.array([h, t], dtype=np.int64)
