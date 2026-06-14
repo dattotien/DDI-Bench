@@ -10,10 +10,11 @@ class DataLoader:
         self.task_dir = params.task_dir
         self.dataset = params.dataset
 
+        dataset_folder = params.dataset.split('_')[0]
         ddi_paths = {
-            'train': os.path.join(self.task_dir, 'data/{}/{}_ddi.txt'.format(params.dataset, 'train')),
-            'valid': os.path.join(self.task_dir, 'data/{}/{}_ddi.txt'.format(params.dataset, 'valid')),
-            'test':  os.path.join(self.task_dir, 'data/{}/{}_ddi.txt'.format(params.dataset, 'test'))
+            'train': os.path.join(self.task_dir, 'data/{}/{}_ddi.txt'.format(dataset_folder, 'train')),
+            'valid': os.path.join(self.task_dir, 'data/{}/{}_ddi.txt'.format(dataset_folder, 'valid')),
+            'test':  os.path.join(self.task_dir, 'data/{}/{}_ddi.txt'.format(dataset_folder, 'test'))
         }
 
         kg_paths = {
@@ -30,22 +31,16 @@ class DataLoader:
             self.load_ent_id()
             self.use_pair_kg = True
             
-            if hasattr(params, 'valid_kg_npz') and params.valid_kg_npz and os.path.exists(params.valid_kg_npz):
-                _, self.valid_pair_kgs = self.load_pair_kgs_from_npz(params.valid_kg_npz)
-            else:
-                self.valid_pair_kgs = DynamicPairKGs(
-                    self.triplets['valid'], self, params.length,
-                    base_kg_triplets=self.valid_kg, ddi_triplets=self.triplets['train']
-                )
+            self.valid_pair_kgs = DynamicPairKGs(
+                self.triplets['valid'], self, params.length,
+                base_kg_triplets=self.valid_kg, ddi_triplets=self.triplets['train']
+            )
                 
-            if hasattr(params, 'test_kg_npz') and params.test_kg_npz and os.path.exists(params.test_kg_npz):
-                _, self.test_pair_kgs = self.load_pair_kgs_from_npz(params.test_kg_npz)
-            else:
-                self.test_pair_kgs = DynamicPairKGs(
-                    self.triplets['test'], self, params.length,
-                    base_kg_triplets=self.test_kg,
-                    ddi_triplets=np.concatenate([self.triplets['train'], self.triplets['valid']], axis=0)
-                )
+            self.test_pair_kgs = DynamicPairKGs(
+                self.triplets['test'], self, params.length,
+                base_kg_triplets=self.test_kg,
+                ddi_triplets=np.concatenate([self.triplets['train'], self.triplets['valid']], axis=0)
+            )
             self.train_data = self.triplets['train']
         elif hasattr(params, 'use_pair_kg') and params.use_pair_kg:
             self.use_pair_kg = True
@@ -171,7 +166,14 @@ class DataLoader:
         adjs = torch.sparse_coo_tensor(indices=torch.LongTensor(edges).t(), values=torch.FloatTensor(values), size=torch.Size([self.all_ent, self.all_ent, 2*self.all_rel+1]), requires_grad=False).cuda()
         return adjs
 
-    def shuffle_train(self, ratio=0.8):
+    def shuffle_train(self, ratio=1.0):
+        all_triplet = np.array(self.triplets['train'])
+        if ratio == 1.0:
+            kg_triplets = np.concatenate([all_triplet, self.train_kg], axis=0)
+            self.KG = self.load_graph(kg_triplets)
+            self.train_data = all_triplet
+            self.n_train = len(self.train_data)
+            return
         n_ent = len(self.ddi_in_kg)
         train_ent = set(self.train_ent) - set(np.random.choice(list(self.ddi_in_kg), n_ent-int(n_ent*ratio)))
         all_triplet = np.array(self.triplets['train'])
