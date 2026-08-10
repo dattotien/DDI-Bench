@@ -8,9 +8,11 @@ from base_model import BaseModel
 import numpy as np
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials, partial
 import time
-import wandb
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ.setdefault('WANDB_MODE', 'offline')
+
+import wandb
 
 parser = argparse.ArgumentParser(description="Parser for EmerGNN")
 parser.add_argument('--task_dir', type=str, default='./', help='the directory to dataset')
