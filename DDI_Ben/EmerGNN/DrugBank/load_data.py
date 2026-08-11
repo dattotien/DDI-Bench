@@ -63,7 +63,8 @@ class DataLoader:
         self.relation2id = relation2id
 
         self.eval_ent = max(self.entity2id.keys()) + 1
-        self.eval_rel = len(self.relation2id)
+
+        self.eval_rel = max(self.relation2id.keys()) + 1
 
     def load_ent_id(self, ):
         id2entity = dict()
