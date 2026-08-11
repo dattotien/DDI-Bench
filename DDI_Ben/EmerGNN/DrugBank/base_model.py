@@ -140,7 +140,7 @@ class BaseModel(object):
         f1 = f1_score(label, pred, average='macro')
         kappa = cohen_kappa_score(label, pred)
 
-        cm = confusion_matrix(label, pred, labels=range(86))
+        cm = confusion_matrix(label, pred, labels=range(self.eval_rel))
         accuracy_per_class = np.diagonal(cm) / cm.sum(axis=1)
 
         return f1, accuracy, kappa, accuracy_per_class
