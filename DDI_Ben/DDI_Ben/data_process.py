@@ -19,8 +19,8 @@ import math
 ### SSI-DDI ### 
 
 
-num_ent = {'drugbank': 1710, 'twosides': 645, 'HetioNet': 34124}
-num_rel = {'drugbank': 86, 'twosides': 209} # 209, 309
+num_ent = {'drugbank': 1567, 'twosides': 645, 'HetioNet': 34124}
+num_rel = {'drugbank': 103, 'twosides': 209} # 209, 309
 
 class Data_record():
     def __init__(self, args):
