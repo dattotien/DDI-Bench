@@ -175,7 +175,7 @@ class Data_record():
             elif args.dataset == 'drugbank':
                 with open('data/initial/drugbank/DB_molecular_feats.pkl', 'rb') as f:
                     x = pkl.load(f, encoding='utf-8')
-                TG_id2smiles = {str(j): x['SMILES'][j] for j in range(1710)}
+                TG_id2smiles = {str(j): x['SMILES'][j] for j in range(1567)}
                 for j in [   6,  136,  889, 1171, 1239, 1254]:
                     TG_id2smiles[str(j)] = ''
 
