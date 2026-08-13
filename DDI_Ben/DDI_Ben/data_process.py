@@ -220,7 +220,15 @@ class Data_record():
                     cid2smiles = json.load(file)
                 id2smiles = {str(cid2id[j]):cid2smiles[j] for j in cid2smiles}
 
-            drug_id_mol_graph_tup = [Chem.MolFromSmiles(id2smiles[j].strip()) for j in id2smiles] 
+            ### keep the drug id -> molecule mapping explicit: the keys of id2smiles are
+            ### node ids and are neither sorted nor complete, so a positional list would
+            ### silently mis-align (and overflow) when indexed by drug id
+            id_mol = {}
+            for j in id2smiles:
+                mol = Chem.MolFromSmiles(id2smiles[j].strip())
+                if mol is not None and mol.GetNumAtoms() > 0:
+                    id_mol[int(j)] = mol
+            drug_id_mol_graph_tup = list(id_mol.values())
             self.ATOM_MAX_NUM = np.max([m.GetNumAtoms() for m in drug_id_mol_graph_tup])
             self.AVAILABLE_ATOM_SYMBOLS = list({a.GetSymbol() for a in itertools.chain.from_iterable(m.GetAtoms() for m in drug_id_mol_graph_tup)})
             self.AVAILABLE_ATOM_DEGREES = list({a.GetDegree() for a in itertools.chain.from_iterable(m.GetAtoms() for m in drug_id_mol_graph_tup)})
@@ -234,9 +242,19 @@ class Data_record():
             self.MAX_RADICAL_ELC = abs(np.max([a.GetNumRadicalElectrons() for a in itertools.chain.from_iterable(m.GetAtoms() for m in drug_id_mol_graph_tup)]))
             self.MAX_RADICAL_ELC = self.MAX_RADICAL_ELC if self.MAX_RADICAL_ELC else 0
 
-            self.MOL_EDGE_LIST_FEAT_MTX = [get_mol_edge_list_and_feat_mtx(mol) for mol in drug_id_mol_graph_tup]
+            self.MOL_EDGE_LIST_FEAT_MTX = {i: get_mol_edge_list_and_feat_mtx(mol) for i, mol in id_mol.items()}
 
-            self.TOTAL_ATOM_FEATS = self.MOL_EDGE_LIST_FEAT_MTX[0][1].shape[-1]
+            self.TOTAL_ATOM_FEATS = next(iter(self.MOL_EDGE_LIST_FEAT_MTX.values()))[1].shape[-1]
+
+            ### drugs that appear in the DDI triplets but have no (valid) SMILES get a
+            ### single dummy atom with a zero feature vector instead of crashing
+            missing = [i for i in range(num_ent[args.dataset]) if i not in self.MOL_EDGE_LIST_FEAT_MTX]
+            for i in missing:
+                self.MOL_EDGE_LIST_FEAT_MTX[i] = (torch.zeros((2, 0), dtype=torch.long),
+                                                  torch.zeros((1, self.TOTAL_ATOM_FEATS)))
+            if missing:
+                print('[SSI-DDI] warning: {}/{} drugs have no molecule graph, '
+                      'replaced by an empty one'.format(len(missing), num_ent[args.dataset]))
         elif args.model == 'MRCGNN':
             ### feature: self.feat
             idd = np.arange(num_ent[args.dataset])
@@ -531,8 +549,10 @@ def get_mol_edge_list_and_feat_mtx(mol_graph):
     features = torch.stack(features)
 
     edge_list = torch.LongTensor([(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in mol_graph.GetBonds()])
-    undirected_edge_list = torch.cat([edge_list, edge_list[:, [1, 0]]], dim=0) if len(edge_list) else edge_list
-    
+    if len(edge_list) == 0: ### molecules without any bond would give a mis-shaped edge_index
+        return torch.zeros((2, 0), dtype=torch.long), features
+    undirected_edge_list = torch.cat([edge_list, edge_list[:, [1, 0]]], dim=0)
+
     return undirected_edge_list.T, features
 
 

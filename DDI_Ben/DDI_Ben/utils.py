@@ -66,9 +66,21 @@ def load_feature(args):
         with open('data/initial/drugbank/DB_molecular_feats.pkl', 'rb') as f:
             x = pkl.load(f, encoding='utf-8')
         # node_feat = torch.FloatTensor(x)
-        feat = []
-        for y in x['Morgan_Features']:
-            feat.append(y)
+        ### the rows of the feature table are NOT in node id order, so scatter them
+        ### into a (num_ent, feat_dim) matrix indexed by 'Node_ID'
+        morgan = [np.asarray(y, dtype=np.float32) for y in x['Morgan_Features']]
+        node_ids = [int(j) for j in x['Node_ID']]
+        feat_dim = morgan[0].shape[0]
+        num_ent = getattr(args, 'num_ent', 0) or (max(node_ids) + 1)
+        feat = np.zeros((num_ent, feat_dim), dtype=np.float32)
+        covered = np.zeros(num_ent, dtype=bool)
+        for nid, vec in zip(node_ids, morgan):
+            if nid < num_ent:
+                feat[nid] = vec
+                covered[nid] = True
+        if (~covered).sum():
+            print('[load_feature] warning: {}/{} drugs have no molecular feature, '
+                  'their feature vector is left as zeros'.format((~covered).sum(), num_ent))
     if 'twosides' in args.dataset:
         with open('data/initial/twosides/DB_molecular_feats.pkl', 'rb') as f:
             feat = pkl.load(f, encoding='utf-8')
@@ -99,7 +111,7 @@ def add_model(args, data_record, device):
                       args = args)
         model.to(device)
     elif args.model in ['SSI-DDI', 'SAGAN']:
-        rel_total = 86 if args.dataset == 'drugbank' else 209 ### SAGAN use SSI-DDI + CDAN
+        rel_total = data_record.num_rel ### SAGAN use SSI-DDI + CDAN
         model = SSI_DDI(args, 55, 64, 64, rel_total, heads_out_feat_params=[32, 32, 32, 32], blocks_params=[2, 2, 2, 2]).to(device)
     elif args.model == 'MRCGNN':
         model = MRCGNN(args, data_record.feat, data_record.num_rel).to(device)
@@ -159,7 +171,7 @@ def read_batch(batch, split, device, args, data_record = None):
             return batch[:4], batch[4].to(device)
     elif args.model in ['SSI-DDI', 'SAGAN']:
         if args.dataset == 'drugbank':
-            label = torch.nn.functional.one_hot(batch[2], num_classes=86).float()
+            label = torch.nn.functional.one_hot(batch[2], num_classes=args.num_rel).float()
         else:
             label = batch[2].float()
         return (batch[0].to(device), batch[1].to(device), batch[2].to(device)), label.to(device)
