@@ -30,13 +30,17 @@ def run_ddi_ben_model(model_name, model_config, base_dir):
     print(f"\n{'='*80}")
     print(f"Starting {model_name} - {model_config['wandb_name']}")
     print(f"{'='*80}\n")
-    
+
+    normalized_model_name = model_name.replace("_TWOSIDES", "")
+    if normalized_model_name not in {"MSTE", "MLP", "Decagon", "TIGER", "SSI-DDI", "MRCGNN", "SAGAN"}:
+        raise ValueError(f"Unsupported DDI_Ben model: {model_name}")
+
     script_path = os.path.join(base_dir, "DDI_Ben", "main.py")
-    cmd = [sys.executable, script_path, 
-           "--model", model_name.replace("_TWOSIDES", ""),
+    cmd = [sys.executable, script_path,
+           "--model", normalized_model_name,
            "--name", model_config['wandb_name']]
     cmd.extend(build_args(model_config['args']))
-    
+
     result = subprocess.run(cmd, cwd=os.path.join(base_dir, "DDI_Ben"))
     return result.returncode == 0
 

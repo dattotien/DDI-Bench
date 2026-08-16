@@ -87,6 +87,23 @@ models:
       patience: 10
       use_feat: 1
 
+  SAGAN:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "SAGAN_DrugBank"
+    args:
+      dataset: "drugbank"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
   MRCGNN:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
@@ -185,6 +202,23 @@ models:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
     wandb_name: "SSI-DDI_TWOSIDES"
+    args:
+      dataset: "twosides"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  SAGAN_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "SAGAN_TWOSIDES"
     args:
       dataset: "twosides"
       dataset_type: "cluster"
