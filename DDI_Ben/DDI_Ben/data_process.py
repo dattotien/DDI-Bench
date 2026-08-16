@@ -209,7 +209,7 @@ class Data_record():
                 self.TG_smile_graph = TG_smile_graph
                 self.TG_drug_subgraphs = TG_drug_subgraphs
                 self.TG_data_sta = TG_data_sta
-        elif args.model in ['SSI-DDI', 'SAGAN']:
+        elif args.model in ['SSI-DDI', 'SAGAN', 'SA-DDI']:
             if args.dataset == 'drugbank':
                 with open('data/initial/drugbank/id2smiles.json', 'r') as file:
                     id2smiles = json.load(file)
@@ -253,8 +253,14 @@ class Data_record():
                 self.MOL_EDGE_LIST_FEAT_MTX[i] = (torch.zeros((2, 0), dtype=torch.long),
                                                   torch.zeros((1, self.TOTAL_ATOM_FEATS)))
             if missing:
-                print('[SSI-DDI] warning: {}/{} drugs have no molecule graph, '
-                      'replaced by an empty one'.format(len(missing), num_ent[args.dataset]))
+                print('[{}] warning: {}/{} drugs have no molecule graph, '
+                      'replaced by an empty one'.format(args.model, len(missing), num_ent[args.dataset]))
+
+            if args.model == 'SA-DDI':
+                ### SA-DDI needs bond features and the line graph on top of the node graph
+                self.MOL_SADDI_DATA = {i: get_mol_line_graph_data(mol) for i, mol in id_mol.items()}
+                for i in missing:
+                    self.MOL_SADDI_DATA[i] = empty_saddi_data(self.TOTAL_ATOM_FEATS)
         elif args.model == 'MRCGNN':
             ### feature: self.feat
             idd = np.arange(num_ent[args.dataset])
@@ -315,6 +321,12 @@ class Data_record():
                 for j in self.split_not_train:
                     dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
                     self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
+        elif args.model == 'SA-DDI':
+            train_dataset = SADDIDataset(self.data['train'], self.MOL_SADDI_DATA, args, ratio=1)
+            self.data_iter['train'] = SADDILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+            for j in self.split_not_train:
+                dts = SADDIDataset(self.data[j], self.MOL_SADDI_DATA, args, ratio=1)
+                self.data_iter[j] = SADDILoader(dts, batch_size=args.batch_size, shuffle=False)
         else:
             self.data_iter['train'] = self.get_data_loader(TrainDataset, 'train', args.batch_size)
             for j in self.split_not_train:
@@ -606,5 +618,111 @@ class SSIDataset(Dataset):
         return Data(x=features, edge_index=edge_index)
 
 class SSILoader(DataLoader):
+    def __init__(self, data, **kwargs):
+        super().__init__(data, collate_fn=data.collate_fn, **kwargs)
+
+### Dataset for SA-DDI
+### Adapted from https://github.com/guaguabujianle/SA-DDI
+### SA-DDI runs a D-MPNN over bonds, so on top of the node graph that SSI-DDI uses it
+### also needs bond features and the line graph (which bond feeds which bond).
+### The atom features are the same 55-dim vectors as SSI-DDI so that the two models are
+### compared on identical inputs.
+
+SADDI_BOND_FEATS = 6
+
+class SADDIData(Data):
+    '''The line graph indexes bonds, not atoms, so batching has to offset
+    line_graph_edge_index by the number of bonds instead of the number of nodes.'''
+    def __inc__(self, key, value, *args, **kwargs):
+        if key == 'line_graph_edge_index':
+            return self.edge_index.size(1) if self.edge_index.nelement() != 0 else 0
+        return super().__inc__(key, value, *args, **kwargs)
+
+
+def bond_features(bond):
+    bond_type = bond.GetBondType()
+    return [
+        bond_type == Chem.rdchem.BondType.SINGLE,
+        bond_type == Chem.rdchem.BondType.DOUBLE,
+        bond_type == Chem.rdchem.BondType.TRIPLE,
+        bond_type == Chem.rdchem.BondType.AROMATIC,
+        bond.GetIsConjugated(),
+        bond.IsInRing(),
+    ]
+
+
+def empty_saddi_data(n_atom_feats):
+    ''' Placeholder for drugs without a usable molecule: one featureless atom carrying a
+    self loop, so the drug still occupies a slot in every bond-level pooling. '''
+    return SADDIData(x=torch.zeros((1, n_atom_feats)),
+                     edge_index=torch.zeros((2, 1), dtype=torch.long),
+                     line_graph_edge_index=torch.zeros((2, 0), dtype=torch.long),
+                     edge_attr=torch.zeros((1, SADDI_BOND_FEATS)))
+
+
+def get_mol_line_graph_data(mol_graph):
+    features = [(atom.GetIdx(), atom_features(atom)) for atom in mol_graph.GetAtoms()]
+    features.sort() # to make sure that the feature matrix is aligned according to the idx of the atom
+    _, features = zip(*features)
+    features = torch.stack(features)
+
+    bonds = list(mol_graph.GetBonds())
+    if len(bonds):
+        edge_list = torch.LongTensor([(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in bonds])
+        edge_feats = torch.FloatTensor([bond_features(b) for b in bonds])
+        ### make it undirected: each bond becomes two directed bonds sharing its features
+        edge_list = torch.cat([edge_list, edge_list[:, [1, 0]]], dim=0)
+        edge_feats = torch.cat([edge_feats] * 2, dim=0)
+    else:
+        ### every pooling in the model runs over bonds, so a bond-less molecule would
+        ### silently drop out of the batch and misalign it; give it a self loop instead
+        edge_list = torch.zeros((1, 2), dtype=torch.long)
+        edge_feats = torch.zeros((1, SADDI_BOND_FEATS))
+
+    ### the line graph: bond (i, j) feeds bond (j, k) for every k other than i
+    conn = (edge_list[:, 1].unsqueeze(1) == edge_list[:, 0].unsqueeze(0)) & \
+           (edge_list[:, 0].unsqueeze(1) != edge_list[:, 1].unsqueeze(0))
+    line_graph_edge_index = conn.nonzero(as_tuple=False).T
+
+    return SADDIData(x=features, edge_index=edge_list.T,
+                     line_graph_edge_index=line_graph_edge_index, edge_attr=edge_feats)
+
+
+class SADDIDataset(Dataset):
+    def __init__(self, tri_list, MOL_SADDI_DATA, args, ratio=1.0, shuffle=True):
+        self.MOL_SADDI_DATA = MOL_SADDI_DATA
+        self.tri_list = [(h, t, r) for h, t, r, *_ in tri_list]
+
+        if shuffle:
+            random.shuffle(self.tri_list)
+        limit = math.ceil(len(self.tri_list) * ratio)
+        self.tri_list = self.tri_list[:limit]
+
+    def __len__(self):
+        return len(self.tri_list)
+
+    def __getitem__(self, index):
+        return self.tri_list[index]
+
+    def collate_fn(self, batch):
+        pos_rels = []
+        pos_h_samples = []
+        pos_t_samples = []
+
+        for h, t, r in batch:
+            pos_rels.append(r)
+            pos_h_samples.append(self.MOL_SADDI_DATA[h])
+            pos_t_samples.append(self.MOL_SADDI_DATA[t])
+
+        ### follow_batch on edge_index gives the model `edge_index_batch`, the graph each
+        ### bond belongs to, which the substructure attention pools over
+        pos_h_samples = Batch.from_data_list(pos_h_samples, follow_batch=['edge_index'])
+        pos_t_samples = Batch.from_data_list(pos_t_samples, follow_batch=['edge_index'])
+        pos_rels = torch.LongTensor(pos_rels)
+
+        return (pos_h_samples, pos_t_samples, pos_rels)
+
+
+class SADDILoader(DataLoader):
     def __init__(self, data, **kwargs):
         super().__init__(data, collate_fn=data.collate_fn, **kwargs)

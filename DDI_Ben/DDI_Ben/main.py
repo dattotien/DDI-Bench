@@ -19,7 +19,7 @@ def main():
     ### set hyperparameters
     parser = argparse.ArgumentParser(description='Task Aware Relation Graph for Few-shot Chemical Property Prediction')
     # general hyperparameters
-    parser.add_argument('--model', type=str, default='MRCGNN', choices=['MSTE', 'MLP', 'Decagon', 'TIGER', 'SSI-DDI', 'MRCGNN', 'SAGAN'])
+    parser.add_argument('--model', type=str, default='MRCGNN', choices=['MSTE', 'MLP', 'Decagon', 'TIGER', 'SSI-DDI', 'SA-DDI', 'MRCGNN', 'SAGAN'])
     parser.add_argument('--name', default='testrun', help='Set run name for saving/restoring models')
 
     ### dataset setting
@@ -47,6 +47,10 @@ def main():
     # MLP model
     parser.add_argument('--mlp_dropout', type=float, default=0.1, help='dropout rate.')
     parser.add_argument('--mlp_dim', type=int, default=200, help='hidden dimension.')
+
+    ### SA-DDI model
+    parser.add_argument('--saddi_dim', type=int, default=64, help='hidden dimension.')
+    parser.add_argument('--saddi_n_iter', type=int, default=10, help='number of D-MPNN iterations, i.e. the largest substructure radius.')
 
     ### Decagon model decagon_drop
     parser.add_argument('--decagon_dim', type=int, default=200, help='hidden dimension.')
