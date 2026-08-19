@@ -112,7 +112,7 @@ class Data_record():
                 train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
                 self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
                 if args.adversarial:
-                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
+                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid'])) + 1) * self.data['valid'])[:int(len(self.data['train']))]
                     train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
                     self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
                 for j in self.split_not_train:
@@ -122,7 +122,7 @@ class Data_record():
                 train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
                 self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
                 if args.adversarial:
-                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
+                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid'])) + 1) * self.data['valid'])[:int(len(self.data['train']))]
                     train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
                     self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
                 for j in self.split_not_train:
