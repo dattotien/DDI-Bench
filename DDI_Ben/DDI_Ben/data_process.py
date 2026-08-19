@@ -82,7 +82,7 @@ class Data_record():
 
         self.triples = dict(self.triples)
 
-        if args.model == 'SSI-DDI':
+        if args.model in ['SSI-DDI', 'SAGAN']:
             smiles_path = args.paths['drugbank_smiles']
             with open(smiles_path, 'r') as file:
                 id2smiles = json.load(file)
@@ -107,12 +107,27 @@ class Data_record():
 
         ### the main part
         self.data_iter = {}
-        if args.model == 'SSI-DDI':
-            train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-            self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-            for j in self.split_not_train:
-                dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
+        if args.model in ['SSI-DDI', 'SAGAN']:
+            if args.dataset == 'drugbank':
+                train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+                if args.adversarial:
+                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
+                    train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                    self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
+                for j in self.split_not_train:
+                    dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                    self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
+            else:
+                train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+                if args.adversarial:
+                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
+                    train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                    self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
+                for j in self.split_not_train:
+                    dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                    self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
         else:
             # MSTE model uses default TrainDataset and TestDataset
             self.data_iter['train'] = self.get_data_loader(TrainDataset, 'train', args.batch_size)

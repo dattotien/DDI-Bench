@@ -52,9 +52,23 @@ def main():
     parser.add_argument('--seed', default=124, type=int, help='Seed for randomization')
     parser.add_argument('--eval_skip', default=1, type=int, help='Evaluate every x epochs')
     parser.add_argument('--patience', default=10, type=int, help='Patience for early stopping')
-    
-    ### Convert config dict to Namespace
-    args = argparse.Namespace(**config)
+
+    # KGE models
+    parser.add_argument('--kge_dim', type=int, default=200, help='hidden dimension.')
+    parser.add_argument('--kge_gamma', type=int, default=1, help='gamma parameter.')
+    parser.add_argument('--kge_dropout', type=float, default=0, help='dropout rate.') ### DDI best 0
+    parser.add_argument('--kge_loss', type=str, default='BCE_mean',  help='loss function')
+
+    # MLP model
+    parser.add_argument('--mlp_dropout', type=float, default=0.1, help='dropout rate.')
+    parser.add_argument('--mlp_dim', type=int, default=200, help='hidden dimension.')
+
+    ### Decagon model decagon_drop
+    parser.add_argument('--decagon_dim', type=int, default=200, help='hidden dimension.')
+    parser.add_argument('--decagon_drop', type=float,   default=0.1, help='Dropout to use in Decagon model')
+
+    ### set basic configurations
+    args = parser.parse_args()
 
     ### set random seed
     random.seed(args.seed)
@@ -63,14 +77,17 @@ def main():
 
     if args.model in ['MSTE']:
         args.use_feat = 0
+        if args.dataset in ['twosides']:
+            args.batch_size = 128
+
+    if args.model == 'SAGAN':
+        args.adversarial = 1
+    else:
+        args.adversarial = 0
 
     args.device = "cuda:"+ str(args.gpu) if torch.cuda.is_available() else "cpu"
-    try:
-        user_secrets = UserSecretsClient()
-        my_secret = user_secrets.get_secret("wandb_key") 
-        wandb.login(key=my_secret)
-    except:
-        wandb.login(key="c4816b32f37419d7d62dc261260293cdfb9d7190")
+
+    wandb.login()
     wandb.init(
         entity="tunglamngo-univesity-of-engineering-and-technology-vnu",
         project="DDI_NCKH_2025",

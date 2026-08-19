@@ -31,11 +31,13 @@ class Trainer():
         ### things need to be recorded in the record name: dataset, model, setting, time
         self.file_name = self.args.dataset + '_' + self.args.model + '_'  + str(self.args.gpu) + '_' + time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + '.txt'
         checkpoint_dir = args.paths['checkpoint_dir']
+        os.makedirs(checkpoint_dir, exist_ok=True)
         self.save_path = os.path.join(checkpoint_dir, self.args.dataset + '_' + self.args.model + '_' + '_' + time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()))
 
         pprint(vars(self.args))
 
         record_dir = args.paths['record_dir']
+        os.makedirs(record_dir, exist_ok=True)
         with open(os.path.join(record_dir, self.file_name), 'w') as f:
             f.write(str(vars(self.args)) + '\n')
             # f.close()
@@ -46,6 +48,15 @@ class Trainer():
         self.data_record = Data_record(args)
 
         self.model = add_model(args, self.data_record, self.device)
+        if self.args.adversarial:
+            if self.args.dataset == 'drugbank':
+                self.random_layer = RandomLayer([self.model.cdan_dim, num_rel[self.args.dataset]], 500).to(self.device)
+            else:
+                self.random_layer = RandomLayer([self.model.cdan_dim, 2], 500).to(self.device)
+            self.random_layer.device(self.device)
+            self.ad_net = AdversarialNetwork(500, 500).to(self.device)
+            self.optimizer_ad = optim.AdamW(self.ad_net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
         self.optimizer = optim.AdamW(self.model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
         self.patience = args.patience
@@ -83,25 +94,52 @@ class Trainer():
         losses = []
 
         train_iter = iter(self.data_record.data_iter['train'])
+        if self.args.adversarial:
+            train_adv_iter = iter(self.data_record.data_iter['train_adv'])
         for step, batch in enumerate(train_iter):
             self.optimizer.zero_grad()
+            if self.args.adversarial:
+                self.optimizer_ad.zero_grad()
 
             split = 'train'
-            data, label = read_batch(batch, split, self.device, self.args, self.data_record) 
+            data, label = read_batch(batch, split, self.device, self.args, self.data_record)
 
-            pred = self.model.forward(data)
-            loss = self.model.loss(pred, label)
+            if self.args.adversarial and self.args.dataset == 'drugbank':
+                data_adv, label_adv = read_batch(next(train_adv_iter), split, self.device, self.args, self.data_record)
+                pred_adv, final_layer_adv = self.model.forward(data_adv)
+                pred, final_layer = self.model.forward(data)
+                loss_label = self.model.loss(pred, label) ### label loss for source domain prediction
+                softmax_pred = nn.Softmax(dim=1)(pred)
+                softmax_pred_adv = nn.Softmax(dim=1)(pred_adv)
+                pred_comb = torch.cat([softmax_pred, softmax_pred_adv], 0) ### whether need softmax
+                final_layer_comb = torch.cat([final_layer, final_layer_adv], 0)
+                loss = CDAN([final_layer_comb, pred_comb], self.ad_net, self.device, None, None, self.random_layer) * 0.01 + loss_label # 0.01 = adversarial weight
+            elif self.args.adversarial and self.args.dataset == 'twosides':
+                data_adv, label_adv = read_batch(next(train_adv_iter), split, self.device, self.args, self.data_record)
+                pred_adv, final_layer_adv = self.model.forward(data_adv)
+                pred, final_layer = self.model.forward(data)
+                loss_label = self.model.loss(pred, label) ### label loss for source domain prediction
+                pred_out = torch.flatten(torch.cat([1 - torch.sigmoid(pred).unsqueeze(2),torch.sigmoid(pred).unsqueeze(2)], dim=2).permute(1,0,2),start_dim=0,end_dim = 1) ### consider to repeat
+                pred_out_adv = torch.flatten(torch.cat([1 - torch.sigmoid(pred_adv).unsqueeze(2),torch.sigmoid(pred_adv).unsqueeze(2)], dim=2).permute(1,0,2),start_dim=0,end_dim = 1)
+                pred_comb = torch.cat([pred_out, pred_out_adv], 0) ### whether need softmax
+                final_layer_comb = torch.cat([final_layer.repeat(209,1), final_layer_adv.repeat(209,1)], 0)
+                loss = CDAN([final_layer_comb, pred_comb], self.ad_net, self.device, None, None, self.random_layer) * 0.01 + loss_label # 0.01 = adversarial weight
+            else:
+                pred = self.model.forward(data)
+                loss = self.model.loss(pred, label)
 
             loss.backward()
             losses.append(loss.item())
             self.optimizer.step()
+            if self.args.adversarial:
+                self.optimizer_ad.step()
 
             if step % 100 == 0:
                 print(time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' [E:{}| {}]: Train Loss:{:.5}\t{}'.format(epoch, step, np.mean(losses), self.args.name))
 
         loss = np.mean(losses)
         # Log training loss to wandb
-        wandb.log({"train/loss": loss, "epoch": epoch})
+            wandb.log({"train/loss": loss, "epoch": epoch})
         return loss
 
     def evaluate(self, split, epoch):
@@ -131,7 +169,10 @@ class Trainer():
 
             for step, batch in enumerate(train_iter):
                 data, label	= read_batch(batch, split, self.device, self.args, self.data_record) 
-                pred = self.model.forward(data)
+                if self.args.adversarial:
+                    pred, _ = self.model.forward(data)
+                else:
+                    pred = self.model.forward(data)
                 
                 if self.args.eval_skip:
                     pred = pred[:,:num_rel[self.args.dataset]]
