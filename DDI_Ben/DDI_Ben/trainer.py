@@ -5,9 +5,8 @@ import torch.nn as nn
 import torch.optim as optim
 import time
 from utils import *
-from utils import _precision, _recall, _f1_score
 
-from sklearn.metrics import f1_score, cohen_kappa_score, roc_auc_score, average_precision_score,accuracy_score
+from sklearn.metrics import roc_auc_score, average_precision_score, accuracy_score
 
 from pprint import pprint
 
@@ -181,23 +180,31 @@ class Trainer():
                 pred_list.append(pred.argmax(1).cpu().numpy())
                 label_list.append(label.argmax(1).cpu().numpy())
             
+            results = {}
             if self.args.dataset == 'drugbank':
                 pred_final = np.concatenate(pred_list)
                 label_final = np.concatenate(label_list)
-                accuracy = np.sum(pred_final == label_final) / len(pred_final)
-                f1 = f1_score(label_final, pred_final, average='macro')
-                kappa = cohen_kappa_score(label_final, pred_final)
+                output_final = np.concatenate(output_list)
 
-                results['accuracy'] = accuracy
-                results['f1'] = f1
-                results['kappa'] = kappa
-                str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: F1-score : {:.5}, Accuracy : {:.5}, Kappa : {:.5}\n'.format(split ,epoch, split, results['f1'], results['accuracy'], results['kappa'])
-                wandb.log({
-                    f"{split}/f1": results['f1'],
-                    f"{split}/accuracy": results['accuracy'],
-                    f"{split}/kappa": results['kappa'],
-                    "epoch": epoch
-                })
+                eval_results = get_evaluation_metrics(
+                    all_labels=label_final.tolist(),
+                    all_preds=pred_final.tolist(),
+                    all_outputs=output_final.tolist(),
+                    label_mapping=self.label_mappings,
+                    options=[1, 2, 3],
+                    is_test=('test' in split),
+                    epoch=epoch,
+                    prefix=split,
+                )
+
+                # Use option-1 micro F1 as the primary tracking metric
+                primary = eval_results.get(1, {})
+                results['f1'] = primary.get('micro', 0.0)
+                results['accuracy'] = primary.get('micro_precision', 0.0)
+                results['kappa'] = primary.get('macro', 0.0)
+                str_record = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + \
+                    ' {} [Epoch {} {}]: Micro-F1: {:.5}, Macro-F1: {:.5}\n'.format(
+                        split, epoch, split, results['f1'], results['kappa'])
             elif self.args.dataset == 'twosides':
                 pred_final = np.concatenate(pred_list)
                 label_final = np.concatenate(label_list)
