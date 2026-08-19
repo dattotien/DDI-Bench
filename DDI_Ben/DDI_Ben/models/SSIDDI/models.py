@@ -80,6 +80,10 @@ class SSI_DDI(nn.Module):
         # attentions = None
         scores = self.KGE(kge_heads, kge_tails, rels, attentions)
 
+        if hasattr(self.args, 'adversarial') and self.args.adversarial:
+            final_layer = torch.cat([kge_heads[:, -1, :], kge_tails[:, -1, :]], dim=-1)
+            return scores, final_layer
+
         return scores
 
     def loss(self, pred, true_label):
