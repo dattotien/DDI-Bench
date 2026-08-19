@@ -86,8 +86,12 @@ def main():
         args.adversarial = 0
 
     args.device = "cuda:"+ str(args.gpu) if torch.cuda.is_available() else "cpu"
-
-    wandb.login()
+    try:
+        user_secrets = UserSecretsClient()
+        my_secret = user_secrets.get_secret("wandb_key") 
+        wandb.login(key=my_secret)
+    except:
+        wandb.login(key="c4816b32f37419d7d62dc261260293cdfb9d7190")
     wandb.init(
         entity="tunglamngo-univesity-of-engineering-and-technology-vnu",
         project="DDI_NCKH_2025",

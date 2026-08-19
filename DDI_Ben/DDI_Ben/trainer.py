@@ -16,8 +16,8 @@ from metric import get_evaluation_metrics
 
 import csv
 import wandb
-num_ent = {'drugbank': 1710, 'twosides': 645, 'HetioNet': 34124}
-num_rel = {'drugbank': 86, 'twosides': 209} # 209, 309, 188
+num_ent = {'drugbank': 1294, 'twosides': 645, 'HetioNet': 34124}
+num_rel = {'drugbank': 4, 'twosides': 209} # 209, 309, 188
 
 # import warnings
 # warnings.filterwarnings('always')

@@ -1,7 +1,7 @@
-# DDI Prediction Configuration for MSTE, SSI-DDI and MLP models
+# DDI Prediction Configuration for MSTE, SSI-DDI, MLP and SAGAN models
 
 # General hyperparameters
-model: "MSTE" # choices: ['MSTE', 'SSI-DDI', 'MLP']
+model: "SAGAN" # choices: ['MSTE', 'SSI-DDI', 'MLP', 'SAGAN']
 name: "testrun" # Run name for saving/restoring models
 
 # Dataset settings
@@ -31,6 +31,11 @@ kge_loss: "BCE_mean" # loss function for MSTE
 # MLP model parameters (only used when model='MLP')
 mlp_dropout: 0.1 # dropout rate for MLP
 mlp_dim: 200 # hidden dimension for MLP
+
+# SAGAN model parameters (only used when model='SAGAN')
+# SAGAN uses SSI-DDI backbone + CDAN adversarial domain adaptation
+# adversarial flag is set automatically based on model choice (no need to change)
+adversarial: 0 # set automatically: 1 for SAGAN, 0 for others
 
 # File paths
 paths:
