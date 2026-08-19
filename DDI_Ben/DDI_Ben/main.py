@@ -9,7 +9,10 @@ import numpy as np
 import wandb
 import warnings
 
-from kaggle_secrets import UserSecretsClient
+try:
+    from kaggle_secrets import UserSecretsClient
+except ImportError:
+    UserSecretsClient = None
 print('pid:', os.getpid())
 
 def load_config(config_path='config.yaml'):
@@ -67,8 +70,20 @@ def main():
     parser.add_argument('--decagon_dim', type=int, default=200, help='hidden dimension.')
     parser.add_argument('--decagon_drop', type=float,   default=0.1, help='Dropout to use in Decagon model')
 
-    ### set basic configurations
+    ### Load config.yaml và set làm default cho argparse
+    _cfg_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+    cfg = load_config(_cfg_path)
+    # Chỉ lấy các key flat (bỏ nested dict như paths, wandb, label_mappings)
+    _flat = {k: v for k, v in cfg.items() if not isinstance(v, dict)}
+    parser.set_defaults(**_flat)
+
+    ### set basic configurations (CLI args vẫn override yaml)
     args = parser.parse_args()
+
+    ### Gắn các section nested vào args
+    args.paths          = cfg.get('paths', {})
+    args.wandb_cfg      = cfg.get('wandb', {})
+    args.label_mappings = cfg.get('label_mappings', {})
 
     ### set random seed
     random.seed(args.seed)
@@ -88,13 +103,13 @@ def main():
     args.device = "cuda:"+ str(args.gpu) if torch.cuda.is_available() else "cpu"
     try:
         user_secrets = UserSecretsClient()
-        my_secret = user_secrets.get_secret("wandb_key") 
+        my_secret = user_secrets.get_secret("wandb_key")
         wandb.login(key=my_secret)
     except:
-        wandb.login(key="c4816b32f37419d7d62dc261260293cdfb9d7190")
+        wandb.login(key=args.wandb_cfg.get('wandb_key', ''))
     wandb.init(
-        entity="tunglamngo-univesity-of-engineering-and-technology-vnu",
-        project="DDI_NCKH_2025",
+        entity=args.wandb_cfg.get('entity', 'default'),
+        project=args.wandb_cfg.get('project', 'DDI'),
         name=args.name,
         config=vars(args)
     )

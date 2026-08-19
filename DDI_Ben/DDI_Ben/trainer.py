@@ -139,7 +139,7 @@ class Trainer():
 
         loss = np.mean(losses)
         # Log training loss to wandb
-            wandb.log({"train/loss": loss, "epoch": epoch})
+        wandb.log({"train/loss": loss, "epoch": epoch})
         return loss
 
     def evaluate(self, split, epoch):
