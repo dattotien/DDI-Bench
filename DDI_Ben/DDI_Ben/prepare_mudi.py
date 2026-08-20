@@ -45,7 +45,7 @@ import shutil
 import sys
 
 import numpy as np
-import pandas as pd
+import pandas as pd  ### chi dung de doc CSV, khong pickle DataFrame
 import pickle as pkl
 import torch
 
@@ -93,6 +93,19 @@ def morgan_count_fp(smiles):
     for bit, count in fp.GetNonzeroElements().items():
         vec[bit] = count
     return vec
+
+
+def columns_dict(rows):
+    """Bảng feature dạng dict thuần {tên cột: list}, xếp theo Node_ID.
+
+    KHÔNG pickle DataFrame: pandas >= 3 lưu cột string bằng dtype `str` mới, và
+    pandas cũ (Kaggle) unpickle lên là `NotImplementedError: StringDtype(...)`.
+    Dict + list + ndarray thì đọc được ở mọi phiên bản, và file DrugBank gốc cũng
+    là dict nên schema thống nhất.
+    """
+    rows = sorted(rows, key=lambda r: r['Node_ID'])
+    return {col: [r[col] for r in rows] for col in
+            ('DrugBank_ID', 'Node_ID', 'SMILES', 'Morgan_Features', 'RDKit2D_Features')}
 
 
 def read_raw(raw_dir):
@@ -253,7 +266,7 @@ def main():
     if os.path.exists(feat_path):
         shutil.copy2(feat_path, feat_path + '.bak')
     with open(feat_path, 'wb') as f:
-        pkl.dump(pd.DataFrame(rows).sort_values('Node_ID').reset_index(drop=True), f)
+        pkl.dump(columns_dict(rows), f)
     print('đã ghi %s (%d drug)' % (feat_path, len(rows)))
 
     print('\nkiểm tra lại: python check_data.py mudi %s' % args.dataset_type)

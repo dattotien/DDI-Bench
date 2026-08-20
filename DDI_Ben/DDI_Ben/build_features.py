@@ -36,7 +36,6 @@ import shutil
 import sys
 
 import numpy as np
-import pandas as pd
 import pickle as pkl
 
 from rdkit import Chem, RDLogger
@@ -290,9 +289,13 @@ def main():
             shutil.copy2(path, path + '.bak')
             print('backup    : %s.bak' % path)
 
-    df = pd.DataFrame(records).sort_values('Node_ID').reset_index(drop=True)
+    ### dict thuần, không phải DataFrame: pandas >= 3 lưu cột string bằng dtype `str`
+    ### mới mà pandas cũ (Kaggle) không unpickle được
+    records = sorted(records, key=lambda r: r['Node_ID'])
+    table = {col: [r[col] for r in records] for col in
+             ('DrugBank_ID', 'Node_ID', 'SMILES', 'Morgan_Features', 'RDKit2D_Features')}
     with open(feat_out, 'wb') as f:
-        pkl.dump(df, f)
+        pkl.dump(table, f)
     with open(smiles_out, 'w') as f:
         json.dump({str(r['Node_ID']): r['SMILES'] for r in records}, f)
     print('đã ghi %d drug.' % len(records))

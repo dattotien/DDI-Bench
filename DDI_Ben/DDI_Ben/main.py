@@ -37,7 +37,9 @@ def main():
     parser.add_argument("--epoch", type=int, default=1, help="training epoch")
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size')
     parser.add_argument('--num_workers', default=None, type=int, help='DataLoader workers; default 10 on Linux, 0 on Windows (spawn makes workers re-import torch per loader)')
-    parser.add_argument('--use_feat', default=1, type=bool, help='Whether to use drug feature')
+    ### type=int, khong phai bool: argparse chay bool('0') -> True nen `--use_feat 0`
+    ### truoc day khong tat duoc feature
+    parser.add_argument('--use_feat', default=1, type=int, choices=[0, 1], help='Whether to use drug feature')
 
     parser.add_argument('--seed', default=124, type=int, help='Seed for randomization')
     parser.add_argument('--eval_skip', default=1, type=int, help='Evaluate every x epochs')
