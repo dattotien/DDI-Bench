@@ -19,15 +19,17 @@ Kiểm tra data trước khi train: `python check_data.py` (hoặc `python check
 
 | dataset    | num_ent | num_rel | task       | eval      | cluster | random | initial/                                       |
 |------------|---------|---------|------------|-----------|---------|--------|------------------------------------------------|
-| `drugbank` | 1710    | 86      | multiclass | acc/F1/κ  | ✅      | ✅     | ❌ — đã xoá, chỉ chạy được MSTE (`--use_feat 0`) |
+| `drugbank` | 1710    | 86      | multiclass | acc/F1/κ  | ✅      | ✅     | feats + id2smiles đủ 1710 drug + relations_2hop |
 | `mecddi`   | 1567    | 103     | multiclass | acc/F1/κ  | ✅      | ❌     | feats + id2smiles đủ 1567 drug, **không có** relations_2hop |
 | `mudi`     | 1295    | 4       | multiclass | có hướng  | ✅      | ❌     | feats + id2smiles đủ 1295 drug, **không có** relations_2hop |
 | `twosides` | 645     | 209     | multilabel | PR/ROC-AUC| ✅      | ✅     | feats + cid2id + cid2smiles + relations_2hop   |
 
-`data/initial/drugbank/` đã được xoá khỏi repo (feature pickle 17 MB +
-`relations_2hop.txt` 25 MB). Split của DrugBank vẫn còn, nên muốn chạy lại
-DrugBank thì chỉ cần thả 3 file đó vào `data/initial/drugbank/` — registry và
-`check_data.py` sẽ báo chính xác file nào còn thiếu.
+Cả bốn dataset đều đủ file để chạy, trừ `relations_2hop.txt` của MecDDI và MUDI
+(nên Decagon / TIGER chỉ chạy được trên DrugBank và TWOSIDES).
+
+`data/initial/drugbank/` nặng 41 MB (feature pickle 17 MB + `relations_2hop.txt`
+25 MB); nếu cần dựng lại từ git thì
+`git checkout 197db0b -- DDI_Ben/DDI_Ben/data/initial/drugbank`.
 
 ## MUDI
 
