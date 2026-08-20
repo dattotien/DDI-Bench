@@ -20,6 +20,9 @@ import pickle as pkl
 
 from collections import defaultdict as ddict
 
+import dataset_registry
+from dataset_registry import is_multiclass, is_multilabel
+
 from torch.utils.data import DataLoader 
 from torch.utils.data import Dataset
 import torch.optim as optim
@@ -35,44 +38,29 @@ warnings.filterwarnings('ignore', category=DeprecationWarning, module='rdkit')
 
 
 def load_data(args):
-    folder_name = args.dataset + '_' + args.dataset_type
-    if 'drugbank' in args.dataset:
-        triple_dict = {'train':[], 'valid_S0':[], 'test_S0':[], 'valid_S1':[], 'test_S1':[], 'valid_S2':[], 'test_S2':[]}
-        sets = ['train', 'valid_S0', 'test_S0', 'valid_S1', 'test_S1', 'valid_S2', 'test_S2']
-        for i in sets:
-            file = open('./data/{}/{}.txt'.format(folder_name, i))
-            for j in file:
-                str_lin = j.strip().split(' ')
-                triple_dict[i].append([int(j) for j in str_lin])
-            file.close()
-    elif 'twosides' in args.dataset:
-        triple_dict = {'train':[], 'valid_S0':[], 'test_S0':[], 'valid_S1':[], 'test_S1':[], 'valid_S2':[], 'test_S2':[]}
-        sets = ['train', 'valid_S0', 'test_S0', 'valid_S1', 'test_S1', 'valid_S2', 'test_S2']
-        for i in sets:
-            file = open('./data/{}/{}.txt'.format(folder_name, i))
-            for j in file:
-                h,t,r,p = j[:-1].split(' ')
-                r_0 = r.split(',')
-                list_cun = [int(j) for j in r_0]
-                list_cun.append(int(p))
-                tuple_cun = tuple(list_cun)
-                triple_dict[i].append([int(h), int(t), tuple_cun])
-            file.close()
+    """Read the split files of args.dataset from its own data/<dataset>_<type>/ folder."""
+    sets = args.splits
+    triple_dict = {i: [] for i in sets}
+    for i in sets:
+        path = dataset_registry.split_path(args, i)
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                "missing split '{}' for dataset '{}' (expected at: {})".format(i, args.dataset, path))
+        with open(path) as file:
+            if is_multiclass(args):
+                for j in file:
+                    str_lin = j.strip().split(' ')
+                    triple_dict[i].append([int(j) for j in str_lin])
+            else:  ### multilabel (TWOSIDES-style): head tail r0,r1,... positive_flag
+                for j in file:
+                    h, t, r, p = j[:-1].split(' ')
+                    list_cun = [int(j) for j in r.split(',')]
+                    list_cun.append(int(p))
+                    triple_dict[i].append([int(h), int(t), tuple(list_cun)])
     return triple_dict
 
 def load_feature(args):
-    feat = 0
-    if 'drugbank' in args.dataset:
-        with open('data/initial/drugbank/DB_molecular_feats.pkl', 'rb') as f:
-            x = pkl.load(f, encoding='utf-8')
-        # node_feat = torch.FloatTensor(x)
-        feat = []
-        for y in x['Morgan_Features']:
-            feat.append(y)
-    if 'twosides' in args.dataset:
-        with open('data/initial/twosides/DB_molecular_feats.pkl', 'rb') as f:
-            feat = pkl.load(f, encoding='utf-8')
-    return feat
+    return dataset_registry.load_features(args)
 
 def add_model(args, data_record, device):
     model = 0
@@ -99,7 +87,7 @@ def add_model(args, data_record, device):
                       args = args)
         model.to(device)
     elif args.model in ['SSI-DDI', 'SAGAN']:
-        rel_total = 86 if args.dataset == 'drugbank' else 209 ### SAGAN use SSI-DDI + CDAN
+        rel_total = data_record.num_rel ### SAGAN use SSI-DDI + CDAN
         model = SSI_DDI(args, 55, 64, 64, rel_total, heads_out_feat_params=[32, 32, 32, 32], blocks_params=[2, 2, 2, 2]).to(device)
     elif args.model == 'MRCGNN':
         model = MRCGNN(args, data_record.feat, data_record.num_rel).to(device)
@@ -118,7 +106,7 @@ def read_batch(batch, split, device, args, data_record = None):
         return [data_record.feat.to(device), data_record.adj.to(device), data_record.adj2.to(device), [triple[:, 0], triple[:, 1]]], label
     elif args.model in ['MSTE']:
         triple, label = [ _.to(device) for _ in batch]
-        if args.dataset == 'drugbank':
+        if is_multiclass(args):
             num_rel = data_record.num_rel
             neg_data = []
             samp_set_0 = [i for i in range(num_rel)]
@@ -128,7 +116,7 @@ def read_batch(batch, split, device, args, data_record = None):
                 neg_data.append(random.sample(samp_set, n_neg))
             neg_data = torch.LongTensor(neg_data).to(device)
             return [triple, neg_data, split], label
-        elif args.dataset == 'twosides':
+        elif is_multilabel(args):
             if split == 'train':
                 return [triple[:,:3], triple[:,3:], split], label
             else:
@@ -153,13 +141,13 @@ def read_batch(batch, split, device, args, data_record = None):
                 triple, label = [ _.to(device) for _ in batch]
                 return [triple[:, 0], triple[:, 1], triple[:, 2]], label
     elif args.model in ['TIGER']:
-        if args.dataset == 'drugbank':
+        if is_multiclass(args):
             return batch[:4], get_label_ddi(batch[4],data_record.num_rel).to(device)
-        elif args.dataset == 'twosides':
+        elif is_multilabel(args):
             return batch[:4], batch[4].to(device)
     elif args.model in ['SSI-DDI', 'SAGAN']:
-        if args.dataset == 'drugbank':
-            label = torch.nn.functional.one_hot(batch[2], num_classes=86).float()
+        if is_multiclass(args):
+            label = torch.nn.functional.one_hot(batch[2], num_classes=data_record.num_rel).float()
         else:
             label = batch[2].float()
         return (batch[0].to(device), batch[1].to(device), batch[2].to(device)), label.to(device)

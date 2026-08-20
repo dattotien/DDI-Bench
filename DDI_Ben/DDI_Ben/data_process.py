@@ -18,15 +18,14 @@ import math
 
 ### SSI-DDI ### 
 
-
-num_ent = {'drugbank': 1567, 'twosides': 645, 'HetioNet': 34124}
-num_rel = {'drugbank': 103, 'twosides': 209} # 209, 309
+import dataset_registry
+from dataset_registry import MULTICLASS, MULTILABEL, is_multiclass, is_multilabel
 
 class Data_record():
     def __init__(self, args):
         self.args = args
 
-        folder_name = args.dataset + '_' + args.dataset_type
+        folder_name = dataset_registry.folder_name(args)
 
         self.link_aug_num = 0
 
@@ -39,15 +38,17 @@ class Data_record():
 
         self.link_aug_num = 0
 
-        self.num_rel, self.args.num_rel = num_rel[args.dataset] + self.link_aug_num, num_rel[args.dataset] + self.link_aug_num
+        cfg = args.dataset_cfg
+
+        self.num_rel, self.args.num_rel = cfg['num_rel'] + self.link_aug_num, cfg['num_rel'] + self.link_aug_num
         
-        self.num_ent, self.args.num_ent = num_ent[args.dataset], num_ent[args.dataset]
+        self.num_ent, self.args.num_ent = cfg['num_ent'], cfg['num_ent']
 
         self.include_splits = list(self.triplets.keys())
         self.split_not_train = [j for j in self.include_splits if j != 'train']
         
         for split in self.include_splits:
-            if split == 'train' and self.args.model in ['MSTE'] and args.dataset == 'twosides': 
+            if split == 'train' and self.args.model in ['MSTE'] and is_multilabel(args): 
                 for j in range(int(len(self.triplets[split])/2)):
                     sub, obj, rel, neg_add = self.triplets[split][j*2][0], self.triplets[split][j*2][1], np.where(np.array(self.triplets[split][j*2][2])[:-1]==1)[0], [self.triplets[split][j*2+1][0], self.triplets[split][j*2+1][1]]
                     for k in rel:
@@ -60,7 +61,7 @@ class Data_record():
                     self.data[split].append((sub, obj, rel))
 
                     if split == 'train': 
-                        if self.args.model in ['Decagon'] and args.dataset == 'twosides':
+                        if self.args.model in ['Decagon'] and is_multilabel(args):
                             self.true_data = self.data[split]
                         sr2o[(sub, obj)].add(rel)
         
@@ -82,7 +83,7 @@ class Data_record():
         self.triples  = ddict(list)
 
         ### train triples
-        if self.args.dataset == 'twosides' and self.args.model in ['MSTE']:
+        if is_multilabel(self.args) and self.args.model in ['MSTE']:
             for sub, obj, rel in self.data['train']:
                 self.triples['train'].append({'triple':(sub, obj, -1), 'label': rel, 'sub_samp': 1})
         else:
@@ -98,7 +99,7 @@ class Data_record():
 
         if args.model == 'Decagon':
             self.edge_index = []
-            if args.dataset == 'twosides':
+            if is_multilabel(args):
                 for sub, obj, rel in self.data['train']:
                     if rel[-1] == 1:
                         self.edge_index.append([sub, obj])
@@ -106,21 +107,18 @@ class Data_record():
                 for sub, obj, rel in self.data['train']:
                     self.edge_index.append([sub, obj])
             trip_de = []
-            if args.dataset == 'twosides':
-                file = open('./data/initial/twosides/relations_2hop.txt')
-            else:
-                file = open('./data/initial/drugbank/relations_2hop.txt')
+            file = open(dataset_registry.network_path(args, 'Decagon'))
             for j in file:
                 str_lin = j.strip().split(' ')
                 trip = [int(j) for j in str_lin]
                 # if trip[2] in [1,21]:
                 if trip[2] in [1, 5, 6, 7, 10, 18]:
                     trip_de.append([trip[0], trip[1]])
-            num_begin = num_ent[args.dataset]
+            num_begin = self.num_ent
             ent_in = np.unique(np.array(trip_de).flatten())
             ind_dict = {}
             for j in ent_in:
-                if j >= num_ent[args.dataset]:
+                if j >= self.num_ent:
                     ind_dict[j] = num_begin
                     num_begin += 1
                 else:
@@ -134,93 +132,49 @@ class Data_record():
             if args.use_feat:
                 feat = torch.zeros((num_begin, self.feat_dim))
                 torch.nn.init.xavier_uniform_(feat)
-                feat[:num_ent[args.dataset]] = self.feat
+                feat[:self.num_ent] = self.feat
                 self.feat = feat
         elif args.model == 'TIGER':
-            if args.dataset == 'twosides':
-                with open('./data/initial/twosides/cid2id.json', 'r') as file:
-                    cid2id = json.load(file)
-                with open('./data/initial/twosides/cid2smiles.json', 'r') as file:
-                    cid2smiles = json.load(file)
-                TG_id2smiles = {str(cid2id[j]):cid2smiles[j] for j in cid2smiles}
-                print("load drug smiles graphs!!")
-                TG_smile_graph, num_rel_mol_update, max_smiles_degree = smile_to_graph('data/{}'.format(folder_name), TG_id2smiles)
-                print("load networks !!")
-                num_node, network_edge_index, network_rel_index, TG_num_rel = read_network('./data/initial/twosides/relations_2hop.txt')
-                print("load DDI samples!!")
-                TG_labels = 0
-                TG_interactions = np.concatenate([np.array([j[:2] for j in self.triplets[k]]) for k in self.include_splits])
-                all_contained_drugs = np.unique(TG_interactions)
-                all_contained_drugs = set([str(j) for j in all_contained_drugs])
-                print("generate subgraphs!!")
-                TG_drug_subgraphs, max_subgraph_degree, num_rel_update = generate_node_subgraphs(folder_name, all_contained_drugs,network_edge_index, network_rel_index,TG_num_rel, args)
-
-                TG_data_sta = {
-                    'num_nodes': num_node + 1,
-                    'num_rel_mol': num_rel_mol_update + 1,
-                    'num_rel_graph': num_rel_update + 1,
-                    'num_interactions': len(TG_interactions),
-                    'num_drugs_DDI': len(all_contained_drugs),
-                    'max_degree_graph': max_smiles_degree + 1,
-                    'max_degree_node': int(max_subgraph_degree)+1
-                }
-
-                print(TG_data_sta)
-                self.TG_interactions = TG_interactions
-                self.TG_labels = TG_labels
-                self.TG_smile_graph = TG_smile_graph
-                self.TG_drug_subgraphs = TG_drug_subgraphs
-                self.TG_data_sta = TG_data_sta
-
-            elif args.dataset == 'drugbank':
-                with open('data/initial/drugbank/DB_molecular_feats.pkl', 'rb') as f:
-                    x = pkl.load(f, encoding='utf-8')
-                TG_id2smiles = {str(j): x['SMILES'][j] for j in range(1567)}
-                for j in [   6,  136,  889, 1171, 1239, 1254]:
-                    TG_id2smiles[str(j)] = ''
-
-                print("load drug smiles graphs!!")
-                TG_smile_graph, num_rel_mol_update, max_smiles_degree = smile_to_graph('data/{}'.format(folder_name), TG_id2smiles)
-                print("load networks !!")
-                num_node, network_edge_index, network_rel_index, TG_num_rel = read_network('./data/initial/drugbank/relations_2hop.txt')
-                print("load DDI samples!!")
-                ### this part remain (need to be simplified)
+            TG_id2smiles = dataset_registry.load_tiger_id2smiles(args)
+            print("load drug smiles graphs!!")
+            TG_smile_graph, num_rel_mol_update, max_smiles_degree = smile_to_graph('data/{}'.format(folder_name), TG_id2smiles)
+            print("load networks !!")
+            num_node, network_edge_index, network_rel_index, TG_num_rel = read_network(dataset_registry.network_path(args, 'TIGER'))
+            print("load DDI samples!!")
+            if is_multiclass(args):
                 TG_triplet_all = np.concatenate([np.array(self.triplets[j]) for j in self.include_splits])
                 TG_interactions = TG_triplet_all[:, :2]
                 TG_labels = TG_triplet_all[:, 2]
-                all_contained_drugs = np.unique(TG_interactions)
-                all_contained_drugs = set([str(j) for j in all_contained_drugs])
-                print("generate subgraphs!!")
-                TG_drug_subgraphs, max_subgraph_degree, num_rel_update = generate_node_subgraphs(folder_name, all_contained_drugs,network_edge_index, network_rel_index,TG_num_rel, args)
+            else:  ### multilabel: label vectors are read straight from the loaders
+                TG_labels = 0
+                TG_interactions = np.concatenate([np.array([j[:2] for j in self.triplets[k]]) for k in self.include_splits])
+            all_contained_drugs = np.unique(TG_interactions)
+            all_contained_drugs = set([str(j) for j in all_contained_drugs])
+            print("generate subgraphs!!")
+            TG_drug_subgraphs, max_subgraph_degree, num_rel_update = generate_node_subgraphs(folder_name, all_contained_drugs,network_edge_index, network_rel_index,TG_num_rel, args)
 
-                TG_data_sta = {
-                    'num_nodes': num_node + 1,
-                    'num_rel_mol': num_rel_mol_update + 1,
-                    'num_rel_graph': num_rel_update + 1,
-                    'num_interactions': len(TG_interactions),
-                    'num_drugs_DDI': len(all_contained_drugs),
-                    'max_degree_graph': max_smiles_degree + 1,
-                    'max_degree_node': int(max_subgraph_degree)+1
-                }
+            TG_data_sta = {
+                'num_nodes': num_node + 1,
+                'num_rel_mol': num_rel_mol_update + 1,
+                'num_rel_graph': num_rel_update + 1,
+                'num_interactions': len(TG_interactions),
+                'num_drugs_DDI': len(all_contained_drugs),
+                'max_degree_graph': max_smiles_degree + 1,
+                'max_degree_node': int(max_subgraph_degree)+1
+            }
 
-                print(TG_data_sta)
-                self.TG_interactions = TG_interactions
-                self.TG_labels = TG_labels
-                self.TG_smile_graph = TG_smile_graph
-                self.TG_drug_subgraphs = TG_drug_subgraphs
-                self.TG_data_sta = TG_data_sta
+            print(TG_data_sta)
+            self.TG_interactions = TG_interactions
+            self.TG_labels = TG_labels
+            self.TG_smile_graph = TG_smile_graph
+            self.TG_drug_subgraphs = TG_drug_subgraphs
+            self.TG_data_sta = TG_data_sta
         elif args.model in ['SSI-DDI', 'SAGAN']:
-            if args.dataset == 'drugbank':
-                with open('data/initial/drugbank/id2smiles.json', 'r') as file:
-                    id2smiles = json.load(file)
-            elif args.dataset == 'twosides':
-                with open('./data/initial/twosides/cid2id.json', 'r') as file:
-                    cid2id = json.load(file)
-                with open('./data/initial/twosides/cid2smiles.json', 'r') as file:
-                    cid2smiles = json.load(file)
-                id2smiles = {str(cid2id[j]):cid2smiles[j] for j in cid2smiles}
+            id2smiles = dataset_registry.load_id2smiles(args, needed_by=args.model, require_all_ids=True)
 
-            drug_id_mol_graph_tup = [Chem.MolFromSmiles(id2smiles[j].strip()) for j in id2smiles] 
+            ### position i must BE drug id i: SSIDataset looks molecules up by id, and
+            ### id2smiles is not guaranteed to be ordered 0..num_ent-1
+            drug_id_mol_graph_tup = [Chem.MolFromSmiles(id2smiles[str(j)].strip()) for j in range(self.num_ent)] 
             self.ATOM_MAX_NUM = np.max([m.GetNumAtoms() for m in drug_id_mol_graph_tup])
             self.AVAILABLE_ATOM_SYMBOLS = list({a.GetSymbol() for a in itertools.chain.from_iterable(m.GetAtoms() for m in drug_id_mol_graph_tup)})
             self.AVAILABLE_ATOM_DEGREES = list({a.GetDegree() for a in itertools.chain.from_iterable(m.GetAtoms() for m in drug_id_mol_graph_tup)})
@@ -239,13 +193,13 @@ class Data_record():
             self.TOTAL_ATOM_FEATS = self.MOL_EDGE_LIST_FEAT_MTX[0][1].shape[-1]
         elif args.model == 'MRCGNN':
             ### feature: self.feat
-            idd = np.arange(num_ent[args.dataset])
+            idd = np.arange(self.num_ent)
             iddd = np.random.permutation(idd)
-            mrc_y_a = torch.cat((torch.ones(num_ent[args.dataset], 1), torch.zeros(num_ent[args.dataset], 1)), dim=1)
-            if args.dataset == 'drugbank':
+            mrc_y_a = torch.cat((torch.ones(self.num_ent, 1), torch.zeros(self.num_ent, 1)), dim=1)
+            if is_multiclass(args):
                 edge_edge = np.array(self.triplets['train'])[:,:2].tolist()
                 edge_type = np.array(self.triplets['train'])[:,2].tolist()
-            elif args.dataset == 'twosides':
+            else:
                 edge_edge, edge_type = [], []
                 for sub, obj, rel in self.data['train']:
                     if rel[-1] == 0:
@@ -268,35 +222,25 @@ class Data_record():
         ### the main part
         self.data_iter = {}
         if args.model == 'TIGER':
-            if args.dataset == 'drugbank':
-                self.data_iter['train'] = DataLoader(DTADataset(x=np.array(self.triplets['train'])[:,:2], y=np.array(self.triplets['train'])[:,2], sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.dataset), batch_size=args.batch_size, shuffle=True, collate_fn=collate, drop_last=True)
-                for j in self.split_not_train:
-                    self.data_iter[j] = DataLoader(DTADataset(x=np.array(self.triplets[j])[:,:2], y=np.array(self.triplets[j])[:,2], sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.dataset), batch_size=args.batch_size, shuffle=False, collate_fn=collate)
-            elif args.dataset == 'twosides':
-                self.data_iter['train'] = DataLoader(DTADataset(x=np.array([k[:2] for k in self.triplets['train']]), y=np.array([list(k[2]) for k in self.triplets['train']]), sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.dataset), batch_size=args.batch_size, shuffle=True, collate_fn=collate, drop_last=True)
-                for j in self.split_not_train:
-                    self.data_iter[j] = DataLoader(DTADataset(x=np.array([k[:2] for k in self.triplets[j]]), y=np.array([list(k[2]) for k in self.triplets[j]]), sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.dataset), batch_size=args.batch_size, shuffle=False, collate_fn=collate)
+            if is_multiclass(args):
+                tg_x = {j: np.array(self.triplets[j])[:,:2] for j in self.include_splits}
+                tg_y = {j: np.array(self.triplets[j])[:,2] for j in self.include_splits}
+            else: ### multilabel: one label vector per pair
+                tg_x = {j: np.array([k[:2] for k in self.triplets[j]]) for j in self.include_splits}
+                tg_y = {j: np.array([list(k[2]) for k in self.triplets[j]]) for j in self.include_splits}
+            self.data_iter['train'] = DataLoader(DTADataset(x=tg_x['train'], y=tg_y['train'], sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.task), batch_size=args.batch_size, shuffle=True, collate_fn=collate, drop_last=True)
+            for j in self.split_not_train:
+                self.data_iter[j] = DataLoader(DTADataset(x=tg_x[j], y=tg_y[j], sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.task), batch_size=args.batch_size, shuffle=False, collate_fn=collate)
         elif args.model in ['SSI-DDI', 'SAGAN']:
-            if args.dataset == 'drugbank':
-                train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-                if args.adversarial:
-                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
-                    train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
-                for j in self.split_not_train:
-                    dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
-            elif args.dataset == 'twosides':
-                train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-                if args.adversarial:
-                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
-                    train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
-                for j in self.split_not_train:
-                    dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
+            train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+            self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+            if args.adversarial:
+                copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
+                train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
+            for j in self.split_not_train:
+                dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
         else:
             self.data_iter['train'] = self.get_data_loader(TrainDataset, 'train', args.batch_size)
             for j in self.split_not_train:
@@ -350,15 +294,15 @@ class TrainDataset(Dataset):
 			triple, label, sub_samp	= torch.LongTensor(ele['triple']), np.array(ele['label']).astype(int), np.float32(ele['sub_samp'])
 		else:
 			triple, label = torch.LongTensor([ele['triple'][0], ele['triple'][1], -1]), np.array(ele['label']).astype(int) 
-		if self.p.dataset == 'drugbank': trp_label = self.get_label_ddi(label) 
-		elif self.p.dataset == 'twosides': 
+		if is_multiclass(self.p): trp_label = self.get_label_ddi(label)
+		else:
 			label = label[0]
 			trp_label = torch.FloatTensor(label)
         
 		if self.p.model in ['MSTE']:
-			if self.p.dataset == 'drugbank':
+			if is_multiclass(self.p):
 				triple = torch.LongTensor([ele['triple'][0], ele['triple'][1], ele['label'][0]])
-			elif self.p.dataset == 'twosides':
+			else:
 				triple = torch.LongTensor([ele['triple'][0], ele['triple'][1], ele['label'][2], ele['label'][0] , ele['label'][1]])
 				trp_label = torch.LongTensor([ele['label'][2]])
 
@@ -389,10 +333,10 @@ class TestDataset(Dataset):
 
 	def __getitem__(self, idx):
 		ele		= self.triples[idx]
-		if self.p.dataset == 'drugbank': triple, label	= torch.LongTensor(ele['triple']), np.array(ele['label']).astype(int)
-		elif self.p.dataset == 'twosides': triple, label	= torch.LongTensor([ele['triple'][0], ele['triple'][1], -1]), np.array(ele['label'])[0]
-		if self.p.dataset == 'drugbank': label		= self.get_label_ddi(label)
-		elif self.p.dataset == 'twosides': label = torch.FloatTensor(label)
+		if is_multiclass(self.p): triple, label	= torch.LongTensor(ele['triple']), np.array(ele['label']).astype(int)
+		else: triple, label	= torch.LongTensor([ele['triple'][0], ele['triple'][1], -1]), np.array(ele['label'])[0]
+		if is_multiclass(self.p): label		= self.get_label_ddi(label)
+		else: label = torch.FloatTensor(label)
 
 		return triple, label
 
@@ -463,7 +407,7 @@ class DTADataset(InMemoryDataset):
         drug1_id = self.drug_ID[idx, 0]
         drug2_id = self.drug_ID[idx, 1]
         # labels = int(self.labels[idx])
-        if self.dt == 'drugbank':
+        if self.dt == MULTICLASS:
             labels = torch.LongTensor([self.labels[idx]])
         else:
             labels = torch.FloatTensor(self.labels[idx])

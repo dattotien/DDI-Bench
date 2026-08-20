@@ -14,8 +14,8 @@ from data_process import *
 
 import csv
 import wandb
-num_ent = {'drugbank': 1567, 'twosides': 645, 'HetioNet': 34124}
-num_rel = {'drugbank': 103, 'twosides': 209} # 209, 309, 188
+
+from dataset_registry import is_multiclass, is_multilabel
 
 # import warnings
 # warnings.filterwarnings('always')
@@ -41,14 +41,14 @@ class Trainer():
 
         self.data_record = Data_record(args)
 
-        if self.args.dataset == 'twosides':
+        if is_multilabel(self.args):
             occur = (np.array([j[2] for j in self.data_record.triplets['train']]).sum(0))[:-1]
             args.loss_weight = occur.min()/occur
 
         self.model = add_model(args, self.data_record, self.device) ###
         if self.args.adversarial:
-            if self.args.dataset == 'drugbank':
-                self.random_layer = RandomLayer([self.model.cdan_dim, num_rel[self.args.dataset]], 500).to(self.device)
+            if is_multiclass(self.args):
+                self.random_layer = RandomLayer([self.model.cdan_dim, self.data_record.num_rel], 500).to(self.device)
             else:
                 self.random_layer = RandomLayer([self.model.cdan_dim, 2], 500).to(self.device)
             self.random_layer.device(self.device)
@@ -102,7 +102,7 @@ class Trainer():
             split = 'train'
             data, label = read_batch(batch, split, self.device, self.args, self.data_record) 
 
-            if self.args.adversarial and self.args.dataset == 'drugbank':
+            if self.args.adversarial and is_multiclass(self.args):
                 data_adv, label_adv = read_batch(next(train_adv_iter), split, self.device, self.args, self.data_record)
                 pred_adv, final_layer_adv = self.model.forward(data_adv)
                 pred, final_layer = self.model.forward(data)
@@ -112,7 +112,7 @@ class Trainer():
                 pred_comb = torch.cat([softmax_pred, softmax_pred_adv], 0) ### whether need softmax
                 final_layer_comb = torch.cat([final_layer, final_layer_adv], 0)
                 loss = CDAN([final_layer_comb, pred_comb], self.ad_net, self.device, None, None, self.random_layer) * 0.01 + loss_label # 0.01 = adversarial weight
-            elif self.args.adversarial and self.args.dataset == 'twosides':
+            elif self.args.adversarial and is_multilabel(self.args):
                 data_adv, label_adv = read_batch(next(train_adv_iter), split, self.device, self.args, self.data_record)
                 pred_adv, final_layer_adv = self.model.forward(data_adv)
                 pred, final_layer = self.model.forward(data)
@@ -174,19 +174,19 @@ class Trainer():
                 else:
                     pred = self.model.forward(data)
                 if self.args.eval_skip:
-                    pred = pred[:,:num_rel[self.args.dataset]]
-                if self.args.dataset == 'drugbank':
+                    pred = pred[:,:self.data_record.num_rel]
+                if is_multiclass(self.args):
                     pred = pred.argmax(1).cpu().numpy()
                     label = label.argmax(1).cpu().numpy()
                     pred_list.append(pred)
                     label_list.append(label)
-                elif self.args.dataset == 'twosides':
+                elif is_multilabel(self.args):
                     pred = torch.sigmoid(pred).cpu().numpy()
                     label = label.cpu().numpy()
                     pred_list.append(pred)
                     label_list.append(label)
             
-            if self.args.dataset == 'drugbank':
+            if is_multiclass(self.args):
                 pred_final = np.concatenate(pred_list)
                 label_final = np.concatenate(label_list)
                 accuracy = np.sum(pred_final == label_final) / len(pred_final)
@@ -203,7 +203,7 @@ class Trainer():
                     f"{split}/kappa": results['kappa'],
                     "epoch": epoch
                 })
-            elif self.args.dataset == 'twosides':
+            elif is_multilabel(self.args):
                 pred_final = np.concatenate(pred_list)
                 label_final = np.concatenate(label_list)
                 pred_cun = []

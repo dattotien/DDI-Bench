@@ -3,6 +3,7 @@ import setproctitle
 import argparse
 from trainer import Trainer
 from utils import *
+import dataset_registry
 import torch
 import numpy as np
 import wandb
@@ -23,7 +24,7 @@ def main():
     parser.add_argument('--name', default='testrun', help='Set run name for saving/restoring models')
 
     ### dataset setting
-    parser.add_argument('--dataset', type=str, default='drugbank', choices=['drugbank', 'twosides'])
+    parser.add_argument('--dataset', type=str, default='drugbank', choices=dataset_registry.DATASET_NAMES)
     parser.add_argument('--dataset_type', type=str, default='cluster', choices=['random', 'cluster']) ### exchange random and sail
 
     parser.add_argument('--gpu', type=int, default=2)
@@ -55,6 +56,11 @@ def main():
     ### set basic configurations
     args = parser.parse_args()
 
+    ### resolve dataset config (num_ent / num_rel / task / paths) -- see dataset_registry.py
+    dataset_registry.apply_to_args(args)
+    print('dataset: {} | task: {} | num_ent: {} | num_rel: {} | data: {}'.format(
+        args.dataset, args.task, args.num_ent, args.num_rel, dataset_registry.data_dir(args)))
+
     ### set random seed
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -62,7 +68,7 @@ def main():
 
     if args.model in ['MSTE']:
         args.use_feat = 0
-        if args.dataset in ['twosides']:
+        if dataset_registry.is_multilabel(args):
             args.batch_size = 128
     
     if args.model == 'SAGAN':

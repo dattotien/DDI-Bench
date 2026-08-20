@@ -10,6 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from   torch.utils.data import DataLoader
 from   collections import defaultdict
+
+from dataset_registry import is_multilabel
 from   tqdm import tqdm
 from   .dataloader import TestDataset
 from   utils import *
@@ -27,7 +29,7 @@ class KGEModel(nn.Module):
 
         self.args = args
 
-        if self.args.dataset == 'twosides':
+        if is_multilabel(self.args):
             self.loss_weight = torch.tensor(self.args.loss_weight,requires_grad=False).to(args.device)
 
         if model_name not in ['MSTE']:
@@ -50,7 +52,7 @@ class KGEModel(nn.Module):
         self.relation_dim = self.hidden_dim
 
         self.entity_embedding     = nn.Parameter(torch.zeros(self.nentity, self.hidden_dim))
-        if model_name == 'MSTE' and self.args.dataset == 'twosides':
+        if model_name == 'MSTE' and is_multilabel(self.args):
             self.relation_embedding   = nn.Parameter(torch.zeros(self.nrelation, self.relation_dim, 2))
         else:
             self.relation_embedding   = nn.Parameter(torch.zeros(self.nrelation, self.relation_dim))
@@ -138,7 +140,7 @@ class KGEModel(nn.Module):
         if 'valid' in mode or 'test' in mode:
             pass
         else:
-            if self.args.dataset == 'twosides':
+            if is_multilabel(self.args):
                 neg_head = self.entity_embedding[neg_data[:,0]]
                 neg_tail = self.entity_embedding[neg_data[:,1]]
                 neg_score = self.model_func[self.model_name](neg_head, pos_relation, neg_tail, inv_relation_mask=inv_relation_mask, mode=mode)
@@ -156,7 +158,7 @@ class KGEModel(nn.Module):
             return [pos_score, neg_score]
 
     def MSTE(self, head, relation, tail, inv_relation_mask, mode='single'):
-        if self.args.dataset == 'twosides':
+        if is_multilabel(self.args):
             score = 0
             head = head.unsqueeze(2)
             tail = tail.unsqueeze(2)
@@ -197,7 +199,7 @@ class KGEModel(nn.Module):
         if self.model_name == 'MSTE':
             if len(negative_score.shape) == 2:
                 negative_score = negative_score.mean(1)
-            if self.args.dataset == 'twosides':
+            if is_multilabel(self.args):
                 loss = self.softplus((self.gamma + negative_score - positive_score)*(self.loss_weight[self.relation_cun.int().tolist()])).mean()
             else:
                 loss = self.softplus((self.gamma + negative_score - positive_score)).mean()
