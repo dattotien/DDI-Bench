@@ -51,6 +51,9 @@ DATASETS = {
         # column, and 95 of the 1567 drugs have no row at all.
         'feat_id_key': 'Node_ID',
         'smiles_file': 'id2smiles.json',
+        # node id -> DrugBank ID, khôi phục từ nguồn MecDDI; build_features.py dùng
+        # file này để gán id chính xác thay vì phải dò theo thứ tự
+        'node_map_file': 'node2drugbank.json',
         'cid2id_file': None,
         'network_file': None,                    # no relations_2hop.txt -> no Decagon / TIGER
         'tiger_smiles_from_feat': False,

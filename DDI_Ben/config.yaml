@@ -18,9 +18,9 @@ models:
   MLP:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
-    wandb_name: "MLP_DrugBank"
+    wandb_name: "MLP_MecDDI"
     args:
-      dataset: "drugbank"
+      dataset: "mecddi"
       dataset_type: "cluster"
       lr: 0.0003
       weight_decay: 0.00001
@@ -37,9 +37,9 @@ models:
   Decagon:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
-    wandb_name: "Decagon_DrugBank"
+    wandb_name: "Decagon_MecDDI"
     args:
-      dataset: "drugbank"
+      dataset: "mecddi"
       dataset_type: "cluster"
       lr: 0.0003
       weight_decay: 0.00001
@@ -56,9 +56,9 @@ models:
   TIGER:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
-    wandb_name: "TIGER_DrugBank"
+    wandb_name: "TIGER_MecDDI"
     args:
-      dataset: "drugbank"
+      dataset: "mecddi"
       dataset_type: "cluster"
       lr: 0.0003
       weight_decay: 0.00001
@@ -73,9 +73,9 @@ models:
   SSI-DDI:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
-    wandb_name: "SSI-DDI_DrugBank"
+    wandb_name: "SSI-DDI_MecDDI"
     args:
-      dataset: "drugbank"
+      dataset: "mecddi"
       dataset_type: "cluster"
       lr: 0.0003
       weight_decay: 0.00001
@@ -87,12 +87,31 @@ models:
       patience: 10
       use_feat: 1
 
+  SA-DDI:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "SA-DDI_MecDDI"
+    args:
+      dataset: "mecddi"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  
+
   MRCGNN:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
-    wandb_name: "MRCGNN_DrugBank"
+    wandb_name: "MRCGNN_MecDDI"
     args:
-      dataset: "drugbank"
+      dataset: "mecddi"
       dataset_type: "cluster"
       lr: 0.0003
       weight_decay: 0.00001
@@ -107,9 +126,9 @@ models:
   KGE:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
-    wandb_name: "KGE_DrugBank"
+    wandb_name: "KGE_MecDDI"
     args:
-      dataset: "drugbank"
+      dataset: "mecddi"
       dataset_type: "cluster"
       lr: 0.0003
       weight_decay: 0.00001
@@ -198,6 +217,23 @@ models:
       patience: 10
       use_feat: 1
 
+  SA-DDI_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "SA-DDI_TWOSIDES"
+    args:
+      dataset: "twosides"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
   MRCGNN_TWOSIDES:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
@@ -240,7 +276,7 @@ models:
   EmerGNN_DrugBank:
     enabled: false # ← Change to true to run
     type: "emergnn_drugbank"
-    wandb_name: "EmerGNN_DrugBank"
+    wandb_name: "EmerGNN_MecDDI"
     args:
       dataset: "S1_1"
       task_dir: "./"

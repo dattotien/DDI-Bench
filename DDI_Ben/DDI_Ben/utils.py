@@ -6,6 +6,7 @@ from models.Decagon import *
 from models.TIGER.randomWalk import *
 from models.TIGER.model.tiger import *
 from models.SSIDDI import *
+from models.SADDI import *
 from models.MRCGNN import *
 import json
 import sys
@@ -89,6 +90,9 @@ def add_model(args, data_record, device):
     elif args.model in ['SSI-DDI', 'SAGAN']:
         rel_total = data_record.num_rel ### SAGAN use SSI-DDI + CDAN
         model = SSI_DDI(args, 55, 64, 64, rel_total, heads_out_feat_params=[32, 32, 32, 32], blocks_params=[2, 2, 2, 2]).to(device)
+    elif args.model == 'SA-DDI':
+        ### 55 atom features (shared with SSI-DDI) and 6 bond features
+        model = SADDI(args, 55, 6, args.saddi_dim, data_record.num_rel, n_iter=args.saddi_n_iter).to(device)
     elif args.model == 'MRCGNN':
         model = MRCGNN(args, data_record.feat, data_record.num_rel).to(device)
     return model
@@ -145,7 +149,7 @@ def read_batch(batch, split, device, args, data_record = None):
             return batch[:4], get_label_ddi(batch[4],data_record.num_rel).to(device)
         elif is_multilabel(args):
             return batch[:4], batch[4].to(device)
-    elif args.model in ['SSI-DDI', 'SAGAN']:
+    elif args.model in ['SSI-DDI', 'SAGAN', 'SA-DDI']:
         if is_multiclass(args):
             label = torch.nn.functional.one_hot(batch[2], num_classes=data_record.num_rel).float()
         else:

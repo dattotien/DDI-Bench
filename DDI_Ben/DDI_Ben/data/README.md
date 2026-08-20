@@ -17,55 +17,48 @@ Kiểm tra data trước khi train: `python check_data.py` (hoặc `python check
 
 ## Tình trạng hiện tại
 
-| dataset    | num_ent | num_rel | task       | cluster | random | initial/                                            |
-|------------|---------|---------|------------|---------|--------|-----------------------------------------------------|
-| `drugbank` | 1710    | 86      | multiclass | ✅      | ✅     | feats + id2smiles + relations_2hop                  |
-| `mecddi`   | 1567    | 103     | multiclass | ✅      | ❌     | feats + id2smiles cho 1560/1567 drug, **không có** relations_2hop |
-| `mudi`     | 1295    | 4       | multiclass | ❌      | ❌     | ❌ (copy vào trước khi chạy)                        |
-| `twosides` | 645     | 209     | multilabel | ✅      | ✅     | feats + cid2id + cid2smiles + relations_2hop        |
+| dataset    | num_ent | num_rel | task       | cluster | random | initial/                                       |
+|------------|---------|---------|------------|---------|--------|------------------------------------------------|
+| `drugbank` | 1710    | 86      | multiclass | ✅      | ✅     | ❌ — đã xoá, chỉ chạy được MSTE (`--use_feat 0`) |
+| `mecddi`   | 1567    | 103     | multiclass | ✅      | ❌     | feats + id2smiles đủ 1567 drug, **không có** relations_2hop |
+| `mudi`     | 1295    | 4       | multiclass | ❌      | ❌     | ❌ (copy vào trước khi chạy)                   |
+| `twosides` | 645     | 209     | multilabel | ✅      | ✅     | feats + cid2id + cid2smiles + relations_2hop   |
 
-## Vấn đề đã biết của MecDDI
+`data/initial/drugbank/` đã được xoá khỏi repo (feature pickle 17 MB +
+`relations_2hop.txt` 25 MB). Split của DrugBank vẫn còn, nên muốn chạy lại
+DrugBank thì chỉ cần thả 3 file đó vào `data/initial/drugbank/` — registry và
+`check_data.py` sẽ báo chính xác file nào còn thiếu.
 
-`data/initial/mecddi/` phủ **1560 / 1567** drug (trước đây 1472, đã bù thêm 88 từ
-`drugbank_smiles_map.csv` bằng `build_features.py`).
+## MecDDI
+
+`data/initial/mecddi/` phủ đủ **1567/1567** drug.
 
 - `DB_molecular_feats.pkl` đánh index theo cột **`Node_ID`**, *không* theo thứ tự
   dòng (khác DrugBank). Registry khai báo `feat_id_key='Node_ID'` nên code tự sắp
   lại theo drug id. **Code cũ lấy theo thứ tự dòng → mọi kết quả MecDDI chạy
-  trước đây đều dùng fingerprint của thuốc khác.**
-- Còn thiếu 7 drug: id `5, 6, 7, 8, 9, 28, 1520`. CSV có ứng viên nhưng không suy
-  được id duy nhất (xem phần dưới). 7 drug này nhận vector 0 và làm SSI-DDI /
-  SAGAN / TIGER dừng với lỗi rõ ràng.
+  trước đây đều dùng fingerprint của thuốc khác; cần chạy lại.**
+- `node2drugbank.json` giữ ánh xạ `node id -> DrugBank ID` cho cả 1567 id.
 - Không có `relations_2hop.txt` → Decagon / TIGER không chạy được.
 - Trong 1472 drug gốc có 238 dòng mà `Morgan_Features` không khớp với `SMILES`
-  của chính nó — hai cột đến từ hai bản DrugBank khác nhau. Không phải lỗi lệch
-  dòng; nếu muốn đồng nhất một nguồn thì chạy `build_features.py --mode rebuild`
-  (đổi feature của ~21% drug cũ, nên sẽ đổi kết quả benchmark).
+  của chính nó — hai cột đến từ hai bản DrugBank khác nhau (không phải lệch
+  dòng). Muốn đồng nhất một nguồn thì chạy `build_features.py --mode rebuild`,
+  nhưng nó đổi feature của ~21% drug nên sẽ đổi luôn kết quả benchmark.
 
-### Bù drug thiếu từ file CSV `Drugbank_ID,SMILES`
+### Sinh lại feature từ CSV `Drugbank_ID,SMILES`
 
 ```
 python build_features.py --dataset mecddi --csv ../../drugbank_smiles_map.csv          # dry run
 python build_features.py --dataset mecddi --csv ../../drugbank_smiles_map.csv --write  # ghi thật (+ .bak)
 ```
 
-CSV không có node id, nhưng node id được đánh theo đúng thứ tự DrugBank ID tăng
-dần nên script khớp danh sách CSV đã sắp xếp với các node id đã biết để suy ra id
-còn thiếu. Fingerprint dùng `GetHashedMorganFingerprint(mol, radius=2, nBits=1024)`
-— công thức này tái tạo đúng từng bit feature có sẵn, nên feature mới cùng hệ với
-feature cũ.
+Fingerprint dùng `GetHashedMorganFingerprint(mol, radius=2, nBits=1024)` (count
+vector) — công thức này tái tạo đúng từng bit feature có sẵn, nên feature mới
+cùng hệ với feature cũ.
 
-7 drug còn lại nằm trong 3 khoảng mà CSV có nhiều ứng viên hơn số id thiếu:
-
-| node id  | ứng viên trong CSV                                     |
-|----------|--------------------------------------------------------|
-| 5..9     | DB00016, DB00017, DB00019, DB00024, DB00026, DB00030 (6 chọn 5) |
-| 28       | DB00107, DB00109 (2 chọn 1)                            |
-| 1520     | DB14158, DB14159 (2 chọn 1)                            |
-
-Muốn xử lý dứt điểm thì cần danh sách drug gốc của MecDDI (hoặc script đã sinh ra
-`DB_molecular_feats.pkl` ban đầu). Tạm chấp nhận đoán theo thứ tự thì thêm
-`--ambiguous guess`, nhưng đoán sai nghĩa là gán nhầm phân tử cho drug id.
+CSV không có node id. Script lấy id từ `node_map_file` khai báo trong registry
+(`node2drugbank.json`); nếu dataset chưa có node map thì nó dò theo thứ tự
+DrugBank ID tăng dần và bỏ qua các chỗ mơ hồ. Đừng dùng `--ambiguous guess`:
+với MecDDI cách đoán đó gán sai 4/7 drug so với node map thật.
 
 ## Định dạng file split
 
@@ -74,14 +67,17 @@ Muốn xử lý dứt điểm thì cần danh sách drug gốc của MecDDI (ho�
 
 ## `initial/<dataset>/` cần gì
 
-| file                     | model dùng tới                | bắt buộc?                          |
-|--------------------------|-------------------------------|------------------------------------|
-| `DB_molecular_feats.pkl` | mọi model có `--use_feat 1`   | có (trừ MSTE)                      |
-| `id2smiles.json`         | SSI-DDI, SAGAN, TIGER         | chỉ khi chạy các model đó          |
-| `relations_2hop.txt`     | Decagon, TIGER                | chỉ khi chạy Decagon / TIGER       |
+| file                     | model dùng tới                     | bắt buộc?                    |
+|--------------------------|------------------------------------|------------------------------|
+| `DB_molecular_feats.pkl` | mọi model có `--use_feat 1`        | có (trừ MSTE)                |
+| `id2smiles.json`         | SSI-DDI, SA-DDI, SAGAN, TIGER      | chỉ khi chạy các model đó    |
+| `relations_2hop.txt`     | Decagon, TIGER                     | chỉ khi chạy Decagon / TIGER |
+| `node2drugbank.json`     | chỉ `build_features.py`            | không                        |
 
 Dataset nào thiếu file sẽ báo lỗi rõ ràng ngay lúc load (`FileNotFoundError`
-kèm đường dẫn mong đợi), thay vì chạy nhầm sang data của dataset khác.
+kèm đường dẫn mong đợi), thay vì chạy nhầm sang data của dataset khác. Riêng
+drug thiếu SMILES thì SSI-DDI / SA-DDI thay bằng phân tử rỗng và in cảnh báo,
+còn drug thiếu feature nhận vector 0 kèm cảnh báo.
 
 ## Thêm dataset mới
 

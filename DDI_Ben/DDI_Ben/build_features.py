@@ -8,14 +8,18 @@ Dùng khi feature file của một dataset không phủ hết drug id (MecDDI: 1
 Mặc định chỉ in báo cáo (dry run); thêm `--write` mới ghi file (bản cũ được
 backup thành `*.bak`).
 
-## Vì sao cần dò lại node id
+## Node id lấy ở đâu
 
-CSV chỉ có DrugBank ID, không có node id của dataset. Nhưng node id được đánh
-theo đúng thứ tự DrugBank ID tăng dần (kiểm chứng được trên 1472 drug đã biết),
-nên chỉ cần khớp danh sách CSV đã sắp xếp với các node id đã biết là suy ra được
-id của phần lớn drug còn thiếu. Chỗ nào một khoảng trống có nhiều ứng viên CSV
-hơn số id còn thiếu thì không suy ra được — script báo rõ và bỏ qua (trừ khi
-truyền `--ambiguous guess`).
+CSV chỉ có DrugBank ID, không có node id của dataset. Hai cách:
+
+1. **Chính xác** — dùng file `node_map_file` khai báo trong registry
+   (MecDDI: `data/initial/mecddi/node2drugbank.json`, phủ đủ id `0..num_ent-1`).
+   Có file này thì không còn chỗ nào mơ hồ.
+2. **Dò theo thứ tự** (fallback khi không có node map) — node id được đánh theo
+   đúng thứ tự DrugBank ID tăng dần, nên khớp danh sách CSV đã sắp xếp với các
+   node id đã biết là suy ra được phần lớn id còn thiếu. Chỗ nào một khoảng
+   trống có nhiều ứng viên CSV hơn số id còn thiếu thì bỏ qua (trừ khi
+   `--ambiguous guess` — cách đoán đó từng gán sai 4/7 drug của MecDDI).
 
 ## Morgan fingerprint
 
@@ -172,7 +176,9 @@ def main():
                    help="fill: giữ nguyên drug đã có, chỉ bù drug thiếu (mặc định). "
                         "rebuild: sinh lại toàn bộ từ CSV cho đồng nhất nguồn.")
     p.add_argument('--ambiguous', default='skip', choices=['skip', 'guess'],
-                   help='xử lý drug không suy được id: bỏ qua, hay đoán theo thứ tự')
+                   help='chỉ dùng khi không có node map: bỏ qua, hay đoán theo thứ tự')
+    p.add_argument('--node-map', default=None,
+                   help='JSON {node_id: DrugBank_ID}; mặc định lấy node_map_file của dataset')
     p.add_argument('--out-dir', default=None, help='mặc định: data/initial/<dataset>')
     p.add_argument('--write', action='store_true', help='thực sự ghi file (mặc định dry run)')
     args = p.parse_args()
@@ -183,12 +189,38 @@ def main():
     print('CSV       : %d drug (%s)' % (len(csv_pairs), args.csv))
     print('Đã có     : %d/%d drug (%s)' % (len(known), args.num_ent, feat_path))
 
-    resolved, ambiguous, unused, unmapped = align(known, csv_pairs, args.num_ent)
+    node_map_path = args.node_map or R.initial_path(args, 'node_map_file')
+    if node_map_path and os.path.exists(node_map_path):
+        with open(node_map_path) as f:
+            node_map = {int(k): v for k, v in json.load(f).items()}
+        print('Node map  : %d id (%s)' % (len(node_map), node_map_path))
+        smiles_of = dict(csv_pairs)
+        resolved, no_smiles = {}, []
+        for node_id, dbid in node_map.items():
+            if node_id in known or node_id >= args.num_ent:
+                continue
+            if dbid in smiles_of:
+                resolved[node_id] = (dbid, smiles_of[dbid])
+            else:
+                no_smiles.append((node_id, dbid))
+        ambiguous, unmapped = [], []
+        unused = [(d, s) for d, s in csv_pairs
+                  if d not in set(node_map.values())]
+        print('Suy ra    : %d drug thiếu lấy được id chính xác từ node map' % len(resolved))
+        if no_smiles:
+            print('Thiếu SMI : %d drug có trong node map nhưng CSV không có SMILES: %s'
+                  % (len(no_smiles), ', '.join('%d/%s' % x for x in no_smiles[:8])))
+    else:
+        if node_map_path:
+            print('Node map  : không có %s, chuyển sang dò theo thứ tự DrugBank ID'
+                  % node_map_path)
+        resolved, ambiguous, unused, unmapped = align(known, csv_pairs, args.num_ent)
     if unmapped:
         print('Cảnh báo  : %d drug đã có nhưng không nằm trong CSV, bị bỏ khỏi việc dò id: %s'
               % (len(unmapped), ', '.join(d for _, d in unmapped[:5])))
-    print('Suy ra    : %d drug thiếu xác định được id chắc chắn' % len(resolved))
     n_amb = sum(len(m) for m, _ in ambiguous)
+    if ambiguous:
+        print('Suy ra    : %d drug thiếu xác định được id chắc chắn' % len(resolved))
     if ambiguous:
         print('Không chắc: %d drug nằm trong %d khoảng có nhiều ứng viên hơn số id thiếu:'
               % (n_amb, len(ambiguous)))
