@@ -261,13 +261,13 @@ class Data_record():
                 train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
                 self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
             for j in self.split_not_train:
-                dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1, shuffle=False)
                 self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
         elif args.model == 'SA-DDI':
             train_dataset = SADDIDataset(self.data['train'], self.MOL_SADDI_DATA, args, ratio=1)
             self.data_iter['train'] = SADDILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
             for j in self.split_not_train:
-                dts = SADDIDataset(self.data[j], self.MOL_SADDI_DATA, args, ratio=1)
+                dts = SADDIDataset(self.data[j], self.MOL_SADDI_DATA, args, ratio=1, shuffle=False)
                 self.data_iter[j] = SADDILoader(dts, batch_size=args.batch_size, shuffle=False)
         else:
             self.data_iter['train'] = self.get_data_loader(TrainDataset, 'train', args.batch_size)
@@ -301,9 +301,12 @@ class Data_record():
             dataset_class(self.triples[split], self.args),
             batch_size      = batch_size,
             shuffle         = shuffle,
-            num_workers     = 10, ### set the default numworkers to 10
+            num_workers     = getattr(self.args, 'num_workers', 10),
             collate_fn      = dataset_class.collate_fn,
-            drop_last=True
+            ### only the training loader may drop a partial batch: dropping eval samples
+            ### loses test rows, and for directed_eval datasets it also breaks the
+            ### forward/inverse pairing that the metrics rely on
+            drop_last       = (split == 'train')
         )
 
 class TrainDataset(Dataset):

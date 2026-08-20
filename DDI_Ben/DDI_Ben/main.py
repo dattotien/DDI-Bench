@@ -9,7 +9,10 @@ import numpy as np
 import wandb
 import warnings
 
-from kaggle_secrets import UserSecretsClient
+try: ### chi co tren Kaggle; ngoai Kaggle van chay duoc voi wandb key mac dinh
+    from kaggle_secrets import UserSecretsClient
+except ImportError:
+    UserSecretsClient = None
 print('pid:', os.getpid())
 
 def main():
@@ -33,6 +36,7 @@ def main():
     parser.add_argument('--lbl_smooth',	type=float,     default=0.0,	help='Label Smoothing') ### usually 0-1
     parser.add_argument("--epoch", type=int, default=1, help="training epoch")
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size')
+    parser.add_argument('--num_workers', default=None, type=int, help='DataLoader workers; default 10 on Linux, 0 on Windows (spawn makes workers re-import torch per loader)')
     parser.add_argument('--use_feat', default=1, type=bool, help='Whether to use drug feature')
 
     parser.add_argument('--seed', default=124, type=int, help='Seed for randomization')
@@ -60,6 +64,9 @@ def main():
     ### set basic configurations
     args = parser.parse_args()
 
+    if args.num_workers is None:
+        args.num_workers = 0 if os.name == 'nt' else 10
+
     ### resolve dataset config (num_ent / num_rel / task / paths) -- see dataset_registry.py
     dataset_registry.apply_to_args(args)
     print('dataset: {} | task: {} | num_ent: {} | num_rel: {} | data: {}'.format(
@@ -85,7 +92,7 @@ def main():
         user_secrets = UserSecretsClient()
         my_secret = user_secrets.get_secret("wandb_key") 
         wandb.login(key=my_secret)
-    except:
+    except Exception:
         wandb.login(key="c4816b32f37419d7d62dc261260293cdfb9d7190")
     wandb.init(
         entity="tunglamngo-univesity-of-engineering-and-technology-vnu",

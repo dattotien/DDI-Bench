@@ -17,17 +17,61 @@ Kiểm tra data trước khi train: `python check_data.py` (hoặc `python check
 
 ## Tình trạng hiện tại
 
-| dataset    | num_ent | num_rel | task       | cluster | random | initial/                                       |
-|------------|---------|---------|------------|---------|--------|------------------------------------------------|
-| `drugbank` | 1710    | 86      | multiclass | ✅      | ✅     | ❌ — đã xoá, chỉ chạy được MSTE (`--use_feat 0`) |
-| `mecddi`   | 1567    | 103     | multiclass | ✅      | ❌     | feats + id2smiles đủ 1567 drug, **không có** relations_2hop |
-| `mudi`     | 1295    | 4       | multiclass | ❌      | ❌     | ❌ (copy vào trước khi chạy)                   |
-| `twosides` | 645     | 209     | multilabel | ✅      | ✅     | feats + cid2id + cid2smiles + relations_2hop   |
+| dataset    | num_ent | num_rel | task       | eval      | cluster | random | initial/                                       |
+|------------|---------|---------|------------|-----------|---------|--------|------------------------------------------------|
+| `drugbank` | 1710    | 86      | multiclass | acc/F1/κ  | ✅      | ✅     | ❌ — đã xoá, chỉ chạy được MSTE (`--use_feat 0`) |
+| `mecddi`   | 1567    | 103     | multiclass | acc/F1/κ  | ✅      | ❌     | feats + id2smiles đủ 1567 drug, **không có** relations_2hop |
+| `mudi`     | 1295    | 4       | multiclass | có hướng  | ✅      | ❌     | feats + id2smiles đủ 1295 drug, **không có** relations_2hop |
+| `twosides` | 645     | 209     | multilabel | PR/ROC-AUC| ✅      | ✅     | feats + cid2id + cid2smiles + relations_2hop   |
 
 `data/initial/drugbank/` đã được xoá khỏi repo (feature pickle 17 MB +
 `relations_2hop.txt` 25 MB). Split của DrugBank vẫn còn, nên muốn chạy lại
 DrugBank thì chỉ cần thả 3 file đó vào `data/initial/drugbank/` — registry và
 `check_data.py` sẽ báo chính xác file nào còn thiếu.
+
+## MUDI
+
+`data/mudi_cluster/` được sinh ra từ `data/mudi_raw/` bằng
+[`../prepare_mudi.py`](../prepare_mudi.py):
+
+```
+python prepare_mudi.py            # dry run
+python prepare_mudi.py --write    # ghi thật (bản cũ -> *.bak)
+```
+
+| split | nguồn | dòng |
+|-------|-------|------|
+| `train` | `MUDIv2_train.csv` | 346 859 |
+| `valid_S0` / `valid_S1` / `valid_S2` | `MUDIv2_val.csv` (**ba bản copy y hệt**) | 113 886 mỗi file |
+| `test_S0` / `test_S1` / `test_S2` | `test_S{0,1,2}.csv` | 130 298 / 174 886 / 38 220 |
+
+MUDI chỉ có một tập val, còn `trainer.py` chọn model riêng cho từng `valid_S*`
+ứng với từng `test_S*`, nên val được duplicate ba lần cho đủ tên file.
+
+- **Nhãn** lấy từ cột `Pharmacodynamics`, đúng 4 lớp
+  `No Interaction=0, Synergism=1, Antagonism=2, New Effect=3`. Cột
+  `Pharmacokinetics` và `Adverse Effects` chưa dùng.
+- **Node id** đánh theo thứ tự DrugBank ID tăng dần trên toàn bộ 1295 drug
+  (union của mọi split), lưu lại ở `initial/mudi/node2drugbank.json`.
+- **Feature** là Morgan count fingerprint `radius=2, nBits=1024` sinh từ
+  `mudi_raw/id2smiles.pt`, cùng công thức với các dataset khác.
+
+### Đánh giá có hướng
+
+MUDI lưu mỗi cặp thuốc theo **cả hai chiều**, và file val/test xếp thành
+`[nửa đầu = chiều xuôi | nửa sau = chiều ngược]`. `metric.py` so dòng `i` với dòng
+`i + N/2` để tính exact-match mức 3 / mức 4 / vô hướng (option 1 / 2 / 3), nên:
+
+- registry đặt `directed_eval: True` + `label_mapping` cho mudi, `trainer.py` gọi
+  `directed_metrics()` thay cho báo cáo accuracy / macro-F1 / kappa;
+- **thứ tự batch khi eval phải nguyên vẹn** — loader eval không shuffle và không
+  `drop_last` nữa (trước đây `drop_last=True` cho mọi split, làm mất dòng cuối
+  của cả test);
+- chọn model / early stopping theo macro-F1 của option 1.
+
+Đừng sắp xếp lại hay lọc bớt dòng trong các file split của MUDI: mất cấu trúc
+nửa/nửa là metric sai mà không báo lỗi. `prepare_mudi.py` kiểm tra tính chất này
+và từ chối ghi nếu không đạt.
 
 ## MecDDI
 

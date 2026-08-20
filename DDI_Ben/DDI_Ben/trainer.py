@@ -16,6 +16,7 @@ import csv
 import wandb
 
 from dataset_registry import is_multiclass, is_multilabel
+from metric import get_evaluation_metrics
 
 # import warnings
 # warnings.filterwarnings('always')
@@ -27,8 +28,8 @@ class Trainer():
         self.args = args
 
         ### things need to be recorded in the record name: dataset, model, setting, time
-        self.file_name = self.args.dataset + '_' + self.args.model + '_'  + str(self.args.gpu) + '_' + time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + '.txt'
-        self.save_path = os.path.join('./checkpoints', self.args.dataset + '_' + self.args.model + '_' + '_' + time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()))
+        self.file_name = self.args.dataset + '_' + self.args.model + '_'  + str(self.args.gpu) + '_' + time.strftime("%Y-%m-%d_%H-%M-%S",time.localtime()) + '.txt'
+        self.save_path = os.path.join('./checkpoints', self.args.dataset + '_' + self.args.model + '_' + '_' + time.strftime("%Y-%m-%d_%H-%M-%S",time.localtime()))
 
         pprint(vars(self.args))
 
@@ -40,6 +41,15 @@ class Trainer():
         args.device = self.device
 
         self.data_record = Data_record(args)
+
+        ### MUDI-style datasets store each pair in both directions and are scored by
+        ### metric.py; everything else keeps the accuracy / macro-F1 / kappa report
+        self.directed_eval = bool(args.dataset_cfg.get('directed_eval'))
+        self.eval_options = args.dataset_cfg.get('eval_options') or [1]
+        if self.directed_eval and not args.dataset_cfg.get('label_mapping'):
+            raise ValueError(
+                "dataset '{}' sets directed_eval but has no label_mapping in "
+                "dataset_registry.py".format(args.dataset))
 
         if is_multilabel(self.args):
             occur = (np.array([j[2] for j in self.data_record.triplets['train']]).sum(0))[:-1]
@@ -166,6 +176,7 @@ class Trainer():
 
             label_list = []
             pred_list = []
+            output_list = []
 
             for step, batch in enumerate(train_iter):
                 data, label	= read_batch(batch, split, self.device, self.args, self.data_record) 
@@ -176,17 +187,22 @@ class Trainer():
                 if self.args.eval_skip:
                     pred = pred[:,:self.data_record.num_rel]
                 if is_multiclass(self.args):
-                    pred = pred.argmax(1).cpu().numpy()
-                    label = label.argmax(1).cpu().numpy()
-                    pred_list.append(pred)
-                    label_list.append(label)
+                    logits = pred.cpu().numpy()
+                    pred_list.append(logits.argmax(1))
+                    label_list.append(label.argmax(1).cpu().numpy())
+                    if self.directed_eval:
+                        output_list.append(logits)
                 elif is_multilabel(self.args):
                     pred = torch.sigmoid(pred).cpu().numpy()
                     label = label.cpu().numpy()
                     pred_list.append(pred)
                     label_list.append(label)
             
-            if is_multiclass(self.args):
+            if is_multiclass(self.args) and self.directed_eval:
+                results, str_record = self.directed_metrics(
+                    split, epoch, np.concatenate(label_list), np.concatenate(pred_list),
+                    np.concatenate(output_list))
+            elif is_multiclass(self.args):
                 pred_final = np.concatenate(pred_list)
                 label_final = np.concatenate(label_list)
                 accuracy = np.sum(pred_final == label_final) / len(pred_final)
@@ -196,6 +212,7 @@ class Trainer():
                 results['accuracy'] = accuracy
                 results['f1'] = f1
                 results['kappa'] = kappa
+                results['score'] = accuracy
                 str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: F1-score : {:.5}, Accuracy : {:.5}, Kappa : {:.5}\n'.format(split ,epoch, split, results['f1'], results['accuracy'], results['kappa'])
                 wandb.log({
                     f"{split}/f1": results['f1'],
@@ -234,6 +251,7 @@ class Trainer():
                 results['AUC-ROC'] = np.array(roc_auc).mean()
                 results['accuracy'] = np.array(ap).mean()
                 results['AP@K'] = np.array(apk_list).mean()
+                results['score'] = results['accuracy']
                 str_record = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()) + ' {} [Epoch {} {}]: PR-AUC : {:.5},  AUC-ROC: {:.5}, Accuracy : {:.5}, AP@K : {:.5}\n'.format(split ,epoch, split, results['PR-AUC'], results['AUC-ROC'], results['accuracy'], results['AP@K'])
                 wandb.log({
                     f"{split}/pr_auc": results['PR-AUC'],
@@ -244,9 +262,40 @@ class Trainer():
                 })
         return results, str_record
 
+    def directed_metrics(self, split, epoch, label_final, pred_final, output_final):
+        """Metrics for datasets whose eval files are laid out as [forward | inverse].
+
+        `metric.py` compares row i against row i + N/2, so the loader order has to
+        survive untouched: no shuffling and no dropped partial batch.
+        """
+        if len(label_final) % 2:
+            raise ValueError(
+                "split '{}' has {} rows; a directed_eval dataset needs an even number so "
+                "that row i and row i+N/2 are the two directions of one pair.".format(
+                    split, len(label_final)))
+        detail = get_evaluation_metrics(
+            label_final.tolist(), pred_final.tolist(), output_final,
+            label_mapping=self.args.dataset_cfg['label_mapping'],
+            options=self.eval_options, is_test=('test' in split),
+            epoch=epoch, prefix=split)
+
+        results = {}
+        for option in self.eval_options:
+            for key in ('macro', 'micro', 'micro_precision', 'micro_recall',
+                        'f1_no_interaction'):
+                results['opt{}_{}'.format(option, key)] = detail[option][key]
+        main = self.eval_options[0]
+        results['score'] = detail[main]['macro']
+        results['accuracy'] = detail[main]['micro'] ### keep a familiar key around
+        str_record = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + \
+            ' {} [Epoch {}]: '.format(split, epoch) + ', '.join(
+                'opt{} macro-F1 {:.5} micro-F1 {:.5}'.format(
+                    o, detail[o]['macro'], detail[o]['micro']) for o in self.eval_options) + '\n'
+        return results, str_record
+
     def update_result(self, results):
         for j in results:
-            if results[j]['accuracy'] > self.best_val_acc[j]:
+            if results[j]['score'] > self.best_val_acc[j]:
                 self.best_val_acc[j] = results[j]['accuracy']
                 self.no_update_epoch[j] = 0
                 self.save_model(self.save_path + j[-3:])

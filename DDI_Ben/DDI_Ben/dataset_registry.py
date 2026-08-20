@@ -30,6 +30,8 @@ DATASETS = {
         'num_ent': 1710,
         'num_rel': 86,
         'task': MULTICLASS,
+        'directed_eval': False,
+        'label_mapping': None,
         'feat_file': 'DB_molecular_feats.pkl',   # dict with 'Morgan_Features' + 'SMILES'
         'feat_key': 'Morgan_Features',
         'feat_id_key': None,                     # rows already ordered by drug id
@@ -45,6 +47,8 @@ DATASETS = {
         'num_ent': 1567,
         'num_rel': 103,
         'task': MULTICLASS,
+        'directed_eval': False,
+        'label_mapping': None,
         'feat_file': 'DB_molecular_feats.pkl',
         'feat_key': 'Morgan_Features',
         # rows are NOT ordered by drug id -- the real id sits in the 'Node_ID'
@@ -61,8 +65,16 @@ DATASETS = {
     },
     'mudi': {
         'num_ent': 1295,
-        'num_rel': 4,                            # No Interaction / Synergism / Antagonism / New Effect
+        'num_rel': 4,
         'task': MULTICLASS,
+        # each pair is stored in both directions, with the whole eval file laid out as
+        # [forward half | inverse half]; metric.py scores the two halves against each
+        # other, so mudi is evaluated by trainer.directed_metrics instead of the plain
+        # accuracy / macro-F1 / kappa report.
+        'directed_eval': True,
+        'eval_options': [1, 2, 3],
+        'label_mapping': {'No Interaction': 0, 'Synergism': 1,
+                          'Antagonism': 2, 'New Effect': 3},
         'feat_file': 'DB_molecular_feats.pkl',
         'feat_key': 'Morgan_Features',
         'feat_id_key': None,
@@ -76,6 +88,8 @@ DATASETS = {
         'num_ent': 645,
         'num_rel': 209,
         'task': MULTILABEL,
+        'directed_eval': False,
+        'label_mapping': None,
         'feat_file': 'DB_molecular_feats.pkl',   # plain list of feature vectors
         'feat_key': None,
         'feat_id_key': None,
@@ -96,6 +110,10 @@ def get_config(dataset):
             "unknown dataset '{}'; known datasets: {}".format(dataset, ', '.join(DATASET_NAMES)))
     cfg = dict(DATASETS[dataset])
     cfg.setdefault('splits', DEFAULT_SPLITS)
+    cfg.setdefault('directed_eval', False)
+    cfg.setdefault('label_mapping', None)
+    cfg.setdefault('eval_options', [1])
+    cfg.setdefault('node_map_file', None)
     cfg['name'] = dataset
     return cfg
 
