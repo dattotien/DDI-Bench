@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 import math
 
+from dataset_registry import is_multiclass
+
 
 class MLP(nn.Module):
     def __init__(self, num_ent, num_rel, nhid, args, init_feat = None):
@@ -18,18 +20,18 @@ class MLP(nn.Module):
             self.lin1 = nn.Linear(nhid*2, nhid)
         self.dropout = nn.Dropout(args.mlp_dropout)
         self.lin2 = nn.Linear(nhid, num_rel)
-        if self.args.dataset == 'drugbank':
+        if is_multiclass(self.args):
             self.bceloss	= torch.nn.BCELoss()
-        elif self.args.dataset == 'twosides':
+        else:
             self.bceloss	= torch.nn.BCELoss(weight = torch.tensor(args.loss_weight))
 
         self.cdan_dim = nhid
         
     def loss(self, pred, true_label):
         # return self.bceloss(pred, true_label)
-        if self.args.dataset == 'drugbank':
+        if is_multiclass(self.args):
             return self.bceloss(torch.softmax(pred,1), true_label)
-        elif self.args.dataset == 'twosides':
+        else:
             return self.bceloss(torch.sigmoid(pred)*true_label[:,:-1], true_label[:,:-1]*true_label[:,-1].unsqueeze(1))
 
     def forward(self, data):
@@ -40,7 +42,7 @@ class MLP(nn.Module):
         y = self.dropout(x)
         final_layer = y
         x = self.lin2(y)
-        if self.args.dataset == 'drugbank':
+        if is_multiclass(self.args):
             x = F.relu(x)
 
         return x

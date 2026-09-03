@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv,RGCNConv
 import numpy as np
+
+from dataset_registry import is_multiclass
 import csv
 import os
 import random
@@ -113,9 +115,9 @@ class MRCGNN(nn.Module):
 
         self.features1 = feature
 
-        if self.args.dataset == 'drugbank':
+        if is_multiclass(self.args):
             self.bceloss	= torch.nn.BCELoss()
-        elif self.args.dataset == 'twosides':
+        else:
             self.bceloss	= torch.nn.BCELoss(weight = torch.tensor(args.loss_weight))
         
         self.other_loss = nn.BCEWithLogitsLoss()
@@ -138,9 +140,9 @@ class MRCGNN(nn.Module):
 
     def loss(self, pred, true_label):
         # return self.bceloss(pred, true_label)
-        if self.args.dataset == 'drugbank':
+        if is_multiclass(self.args):
             return self.bceloss(torch.softmax(pred,1), true_label) + 0.05 * self.other_loss(self.ret_os, self.day.float())+ 0.1 * self.other_loss(self.ret_os_a, self.day.float())
-        elif self.args.dataset == 'twosides':
+        else:
             return self.bceloss(torch.sigmoid(pred)*true_label[:,:-1], true_label[:,:-1]*true_label[:,-1].unsqueeze(1)) + 0.05 * self.other_loss(self.ret_os, self.day.float())+ 0.1 * self.other_loss(self.ret_os_a, self.day.float())
 
     def MLP(self, vectors, layer):

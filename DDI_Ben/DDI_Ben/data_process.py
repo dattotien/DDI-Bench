@@ -18,15 +18,14 @@ import math
 
 ### SSI-DDI ### 
 
-
-num_ent = {'drugbank':  1295, 'HetioNet': 34124}
-num_rel = {'drugbank': 4}
+import dataset_registry
+from dataset_registry import MULTICLASS, MULTILABEL, is_multiclass, is_multilabel
 
 class Data_record():
     def __init__(self, args):
         self.args = args
 
-        folder_name = args.dataset + '_' + args.dataset_type
+        folder_name = dataset_registry.folder_name(args)
 
         self.link_aug_num = 0
 
@@ -39,20 +38,32 @@ class Data_record():
 
         self.link_aug_num = 0
 
-        self.num_rel, self.args.num_rel = num_rel[args.dataset] + self.link_aug_num, num_rel[args.dataset] + self.link_aug_num
+        cfg = args.dataset_cfg
+
+        self.num_rel, self.args.num_rel = cfg['num_rel'] + self.link_aug_num, cfg['num_rel'] + self.link_aug_num
         
-        self.num_ent, self.args.num_ent = num_ent[args.dataset], num_ent[args.dataset]
+        self.num_ent, self.args.num_ent = cfg['num_ent'], cfg['num_ent']
 
         self.include_splits = list(self.triplets.keys())
         self.split_not_train = [j for j in self.include_splits if j != 'train']
         
         for split in self.include_splits:
-            for j in self.triplets[split]:
-                sub, obj, rel = j[0], j[1], j[2]
-                self.data[split].append((sub, obj, rel))
+            if split == 'train' and self.args.model in ['MSTE'] and is_multilabel(args): 
+                for j in range(int(len(self.triplets[split])/2)):
+                    sub, obj, rel, neg_add = self.triplets[split][j*2][0], self.triplets[split][j*2][1], np.where(np.array(self.triplets[split][j*2][2])[:-1]==1)[0], [self.triplets[split][j*2+1][0], self.triplets[split][j*2+1][1]]
+                    for k in rel:
+                        self.data[split].append((sub, obj, [neg_add[0], neg_add[1], k]))
+                        sr2o[(sub, obj)].add((neg_add[0], neg_add[1], k))
+            else:
+                for j in self.triplets[split]:
+                    # sub, obj, rel = self.ent2id[j[0]], self.ent2id[j[1]], self.rel2id[str(j[2])]
+                    sub, obj, rel = j[0], j[1], j[2]
+                    self.data[split].append((sub, obj, rel))
 
-                if split == 'train': 
-                    sr2o[(sub, obj)].add(rel)
+                    if split == 'train': 
+                        if self.args.model in ['Decagon'] and is_multilabel(args):
+                            self.true_data = self.data[split]
+                        sr2o[(sub, obj)].add(rel)
         
         if args.use_feat:
             self.feat = torch.FloatTensor(np.array(load_feature(args))).to(self.device)
@@ -72,8 +83,12 @@ class Data_record():
         self.triples  = ddict(list)
 
         ### train triples
-        for (sub, rel), obj in self.sr2o.items():
-            self.triples['train'].append({'triple':(sub, rel, -1), 'label': self.sr2o[(sub, rel)], 'sub_samp': 1})
+        if is_multilabel(self.args) and self.args.model in ['MSTE']:
+            for sub, obj, rel in self.data['train']:
+                self.triples['train'].append({'triple':(sub, obj, -1), 'label': rel, 'sub_samp': 1})
+        else:
+            for (sub, rel), obj in self.sr2o.items():
+                self.triples['train'].append({'triple':(sub, rel, -1), 'label': self.sr2o[(sub, rel)], 'sub_samp': 1})
 
         ### valid & test triplets
         for split in self.split_not_train:
@@ -82,12 +97,90 @@ class Data_record():
 
         self.triples = dict(self.triples)
 
-        if args.model in ['SSI-DDI', 'SAGAN']:
-            smiles_path = args.paths['drugbank_smiles']
-            with open(smiles_path, 'r') as file:
-                id2smiles = json.load(file)
+        if args.model == 'Decagon':
+            self.edge_index = []
+            if is_multilabel(args):
+                for sub, obj, rel in self.data['train']:
+                    if rel[-1] == 1:
+                        self.edge_index.append([sub, obj])
+            else:
+                for sub, obj, rel in self.data['train']:
+                    self.edge_index.append([sub, obj])
+            trip_de = []
+            file = open(dataset_registry.network_path(args, 'Decagon'))
+            for j in file:
+                str_lin = j.strip().split(' ')
+                trip = [int(j) for j in str_lin]
+                # if trip[2] in [1,21]:
+                if trip[2] in [1, 5, 6, 7, 10, 18]:
+                    trip_de.append([trip[0], trip[1]])
+            num_begin = self.num_ent
+            ent_in = np.unique(np.array(trip_de).flatten())
+            ind_dict = {}
+            for j in ent_in:
+                if j >= self.num_ent:
+                    ind_dict[j] = num_begin
+                    num_begin += 1
+                else:
+                    ind_dict[j] = j
+            for j in trip_de:
+                j = [ind_dict[j[0]], ind_dict[j[1]]]
+                self.edge_index.append(j)
 
-            drug_id_mol_graph_tup = [Chem.MolFromSmiles(id2smiles[j].strip()) for j in id2smiles] 
+            self.edge_index	= torch.LongTensor(self.edge_index).to(self.device).t()
+
+            if args.use_feat:
+                feat = torch.zeros((num_begin, self.feat_dim))
+                torch.nn.init.xavier_uniform_(feat)
+                feat[:self.num_ent] = self.feat
+                self.feat = feat
+        elif args.model == 'TIGER':
+            TG_id2smiles = dataset_registry.load_tiger_id2smiles(args)
+            print("load drug smiles graphs!!")
+            TG_smile_graph, num_rel_mol_update, max_smiles_degree = smile_to_graph('data/{}'.format(folder_name), TG_id2smiles)
+            print("load networks !!")
+            num_node, network_edge_index, network_rel_index, TG_num_rel = read_network(dataset_registry.network_path(args, 'TIGER'))
+            print("load DDI samples!!")
+            if is_multiclass(args):
+                TG_triplet_all = np.concatenate([np.array(self.triplets[j]) for j in self.include_splits])
+                TG_interactions = TG_triplet_all[:, :2]
+                TG_labels = TG_triplet_all[:, 2]
+            else:  ### multilabel: label vectors are read straight from the loaders
+                TG_labels = 0
+                TG_interactions = np.concatenate([np.array([j[:2] for j in self.triplets[k]]) for k in self.include_splits])
+            all_contained_drugs = np.unique(TG_interactions)
+            all_contained_drugs = set([str(j) for j in all_contained_drugs])
+            print("generate subgraphs!!")
+            TG_drug_subgraphs, max_subgraph_degree, num_rel_update = generate_node_subgraphs(folder_name, all_contained_drugs,network_edge_index, network_rel_index,TG_num_rel, args)
+
+            TG_data_sta = {
+                'num_nodes': num_node + 1,
+                'num_rel_mol': num_rel_mol_update + 1,
+                'num_rel_graph': num_rel_update + 1,
+                'num_interactions': len(TG_interactions),
+                'num_drugs_DDI': len(all_contained_drugs),
+                'max_degree_graph': max_smiles_degree + 1,
+                'max_degree_node': int(max_subgraph_degree)+1
+            }
+
+            print(TG_data_sta)
+            self.TG_interactions = TG_interactions
+            self.TG_labels = TG_labels
+            self.TG_smile_graph = TG_smile_graph
+            self.TG_drug_subgraphs = TG_drug_subgraphs
+            self.TG_data_sta = TG_data_sta
+        elif args.model in ['SSI-DDI', 'SAGAN', 'SA-DDI']:
+            id2smiles = dataset_registry.load_id2smiles(args, needed_by=args.model)
+
+            ### keep the drug id -> molecule mapping explicit: the keys of id2smiles are
+            ### node ids and are neither sorted nor complete, so a positional list would
+            ### silently mis-align (and overflow) when indexed by drug id
+            id_mol = {}
+            for j in id2smiles:
+                mol = Chem.MolFromSmiles(id2smiles[j].strip())
+                if mol is not None and mol.GetNumAtoms() > 0:
+                    id_mol[int(j)] = mol
+            drug_id_mol_graph_tup = list(id_mol.values())
             self.ATOM_MAX_NUM = np.max([m.GetNumAtoms() for m in drug_id_mol_graph_tup])
             self.AVAILABLE_ATOM_SYMBOLS = list({a.GetSymbol() for a in itertools.chain.from_iterable(m.GetAtoms() for m in drug_id_mol_graph_tup)})
             self.AVAILABLE_ATOM_DEGREES = list({a.GetDegree() for a in itertools.chain.from_iterable(m.GetAtoms() for m in drug_id_mol_graph_tup)})
@@ -101,35 +194,82 @@ class Data_record():
             self.MAX_RADICAL_ELC = abs(np.max([a.GetNumRadicalElectrons() for a in itertools.chain.from_iterable(m.GetAtoms() for m in drug_id_mol_graph_tup)]))
             self.MAX_RADICAL_ELC = self.MAX_RADICAL_ELC if self.MAX_RADICAL_ELC else 0
 
-            self.MOL_EDGE_LIST_FEAT_MTX = [get_mol_edge_list_and_feat_mtx(mol) for mol in drug_id_mol_graph_tup]
+            self.MOL_EDGE_LIST_FEAT_MTX = {i: get_mol_edge_list_and_feat_mtx(mol) for i, mol in id_mol.items()}
 
-            self.TOTAL_ATOM_FEATS = self.MOL_EDGE_LIST_FEAT_MTX[0][1].shape[-1]
+            self.TOTAL_ATOM_FEATS = next(iter(self.MOL_EDGE_LIST_FEAT_MTX.values()))[1].shape[-1]
+
+            ### drugs that appear in the DDI triplets but have no (valid) SMILES get a
+            ### single dummy atom with a zero feature vector instead of crashing
+            missing = [i for i in range(self.num_ent) if i not in self.MOL_EDGE_LIST_FEAT_MTX]
+            for i in missing:
+                self.MOL_EDGE_LIST_FEAT_MTX[i] = (torch.zeros((2, 0), dtype=torch.long),
+                                                  torch.zeros((1, self.TOTAL_ATOM_FEATS)))
+            if missing:
+                print('[{}] warning: {}/{} drugs have no molecule graph, '
+                      'replaced by an empty one'.format(args.model, len(missing), self.num_ent))
+
+            if args.model == 'SA-DDI':
+                ### SA-DDI needs bond features and the line graph on top of the node graph
+                self.MOL_SADDI_DATA = {i: get_mol_line_graph_data(mol) for i, mol in id_mol.items()}
+                for i in missing:
+                    self.MOL_SADDI_DATA[i] = empty_saddi_data(self.TOTAL_ATOM_FEATS)
+        elif args.model == 'MRCGNN':
+            ### feature: self.feat
+            idd = np.arange(self.num_ent)
+            iddd = np.random.permutation(idd)
+            mrc_y_a = torch.cat((torch.ones(self.num_ent, 1), torch.zeros(self.num_ent, 1)), dim=1)
+            if is_multiclass(args):
+                edge_edge = np.array(self.triplets['train'])[:,:2].tolist()
+                edge_type = np.array(self.triplets['train'])[:,2].tolist()
+            else:
+                edge_edge, edge_type = [], []
+                for sub, obj, rel in self.data['train']:
+                    if rel[-1] == 0:
+                        continue
+                    iddxx = np.where(np.array(rel)[:-1]==1)[0]
+                    for ll in iddxx:
+                        edge_edge.append([sub, obj])
+                        edge_type.append(ll)
+
+            edge_edge += [[b,a] for a,b in edge_edge]
+            edge_edge = torch.tensor(edge_edge, dtype=torch.long) ### need add reverse edges in
+            edge_type_reverse = edge_type + edge_type
+            self.dt_o = DATA.Data(x=self.feat, edge_index=edge_edge.t().contiguous(), edge_type=edge_type_reverse)
+            self.feat_a = self.feat[iddd]
+            self.dt_s = DATA.Data(x=self.feat_a, edge_index=edge_edge.t().contiguous(), edge_type=edge_type_reverse)
+            random.shuffle(edge_type)
+            shuffle_edge_type_reverse = edge_type + edge_type
+            self.dt_a = DATA.Data(x=self.feat, y = mrc_y_a, edge_type=shuffle_edge_type_reverse)
 
         ### the main part
         self.data_iter = {}
-        if args.model in ['SSI-DDI', 'SAGAN']:
-            if args.dataset == 'drugbank':
-                train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-                if args.adversarial:
-                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid'])) + 1) * self.data['valid'])[:int(len(self.data['train']))]
-                    train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
-                for j in self.split_not_train:
-                    dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
-            else:
-                train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-                if args.adversarial:
-                    copy_triplets = ((int(len(self.data['train'])/len(self.data['valid'])) + 1) * self.data['valid'])[:int(len(self.data['train']))]
-                    train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
-                for j in self.split_not_train:
-                    dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
-                    self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
+        if args.model == 'TIGER':
+            if is_multiclass(args):
+                tg_x = {j: np.array(self.triplets[j])[:,:2] for j in self.include_splits}
+                tg_y = {j: np.array(self.triplets[j])[:,2] for j in self.include_splits}
+            else: ### multilabel: one label vector per pair
+                tg_x = {j: np.array([k[:2] for k in self.triplets[j]]) for j in self.include_splits}
+                tg_y = {j: np.array([list(k[2]) for k in self.triplets[j]]) for j in self.include_splits}
+            self.data_iter['train'] = DataLoader(DTADataset(x=tg_x['train'], y=tg_y['train'], sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.task), batch_size=args.batch_size, shuffle=True, collate_fn=collate, drop_last=True)
+            for j in self.split_not_train:
+                self.data_iter[j] = DataLoader(DTADataset(x=tg_x[j], y=tg_y[j], sub_graph=TG_drug_subgraphs, smile_graph=TG_smile_graph, dt = args.task), batch_size=args.batch_size, shuffle=False, collate_fn=collate)
+        elif args.model in ['SSI-DDI', 'SAGAN']:
+            train_dataset = SSIDataset(self.data['train'], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+            self.data_iter['train'] = SSILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+            if args.adversarial:
+                copy_triplets = ((int(len(self.data['train'])/len(self.data['valid_S1'])) + 1) * self.data['valid_S1'])[:int(len(self.data['train']))]
+                train_dataset_adv = SSIDataset(copy_triplets, self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1)
+                self.data_iter['train_adv'] = SSILoader(train_dataset_adv, batch_size=args.batch_size, shuffle=True)
+            for j in self.split_not_train:
+                dts = SSIDataset(self.data[j], self.MOL_EDGE_LIST_FEAT_MTX, args, ratio=1, neg_ent=1, shuffle=False)
+                self.data_iter[j] = SSILoader(dts, batch_size=args.batch_size, shuffle=False)
+        elif args.model == 'SA-DDI':
+            train_dataset = SADDIDataset(self.data['train'], self.MOL_SADDI_DATA, args, ratio=1)
+            self.data_iter['train'] = SADDILoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+            for j in self.split_not_train:
+                dts = SADDIDataset(self.data[j], self.MOL_SADDI_DATA, args, ratio=1, shuffle=False)
+                self.data_iter[j] = SADDILoader(dts, batch_size=args.batch_size, shuffle=False)
         else:
-            # MSTE model uses default TrainDataset and TestDataset
             self.data_iter['train'] = self.get_data_loader(TrainDataset, 'train', args.batch_size)
             for j in self.split_not_train:
                 self.data_iter[j] = self.get_data_loader(TestDataset, j, args.batch_size, shuffle = False)
@@ -161,9 +301,12 @@ class Data_record():
             dataset_class(self.triples[split], self.args),
             batch_size      = batch_size,
             shuffle         = shuffle,
-            num_workers     = 10, ### set the default numworkers to 10
+            num_workers     = getattr(self.args, 'num_workers', 10),
             collate_fn      = dataset_class.collate_fn,
-            drop_last=True
+            ### only the training loader may drop a partial batch: dropping eval samples
+            ### loses test rows, and for directed_eval datasets it also breaks the
+            ### forward/inverse pairing that the metrics rely on
+            drop_last       = (split == 'train')
         )
 
 class TrainDataset(Dataset):
@@ -182,10 +325,17 @@ class TrainDataset(Dataset):
 			triple, label, sub_samp	= torch.LongTensor(ele['triple']), np.array(ele['label']).astype(int), np.float32(ele['sub_samp'])
 		else:
 			triple, label = torch.LongTensor([ele['triple'][0], ele['triple'][1], -1]), np.array(ele['label']).astype(int) 
-		trp_label = self.get_label_ddi(label)
+		if is_multiclass(self.p): trp_label = self.get_label_ddi(label)
+		else:
+			label = label[0]
+			trp_label = torch.FloatTensor(label)
         
 		if self.p.model in ['MSTE']:
-			triple = torch.LongTensor([ele['triple'][0], ele['triple'][1], ele['label'][0]])
+			if is_multiclass(self.p):
+				triple = torch.LongTensor([ele['triple'][0], ele['triple'][1], ele['label'][0]])
+			else:
+				triple = torch.LongTensor([ele['triple'][0], ele['triple'][1], ele['label'][2], ele['label'][0] , ele['label'][1]])
+				trp_label = torch.LongTensor([ele['label'][2]])
 
 		if self.p.lbl_smooth != 0.0:
 			trp_label = (1.0 - self.p.lbl_smooth)*trp_label + (1.0/self.p.num_ent)
@@ -214,8 +364,10 @@ class TestDataset(Dataset):
 
 	def __getitem__(self, idx):
 		ele		= self.triples[idx]
-		triple, label	= torch.LongTensor(ele['triple']), np.array(ele['label']).astype(int)
-		label		= self.get_label_ddi(label)
+		if is_multiclass(self.p): triple, label	= torch.LongTensor(ele['triple']), np.array(ele['label']).astype(int)
+		else: triple, label	= torch.LongTensor([ele['triple'][0], ele['triple'][1], -1]), np.array(ele['label'])[0]
+		if is_multiclass(self.p): label		= self.get_label_ddi(label)
+		else: label = torch.FloatTensor(label)
 
 		return triple, label
 
@@ -286,7 +438,7 @@ class DTADataset(InMemoryDataset):
         drug1_id = self.drug_ID[idx, 0]
         drug2_id = self.drug_ID[idx, 1]
         # labels = int(self.labels[idx])
-        if self.dt == 'drugbank':
+        if self.dt == MULTICLASS:
             labels = torch.LongTensor([self.labels[idx]])
         else:
             labels = torch.FloatTensor(self.labels[idx])
@@ -354,8 +506,10 @@ def get_mol_edge_list_and_feat_mtx(mol_graph):
     features = torch.stack(features)
 
     edge_list = torch.LongTensor([(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in mol_graph.GetBonds()])
-    undirected_edge_list = torch.cat([edge_list, edge_list[:, [1, 0]]], dim=0) if len(edge_list) else edge_list
-    
+    if len(edge_list) == 0: ### molecules without any bond would give a mis-shaped edge_index
+        return torch.zeros((2, 0), dtype=torch.long), features
+    undirected_edge_list = torch.cat([edge_list, edge_list[:, [1, 0]]], dim=0)
+
     return undirected_edge_list.T, features
 
 
@@ -409,5 +563,111 @@ class SSIDataset(Dataset):
         return Data(x=features, edge_index=edge_index)
 
 class SSILoader(DataLoader):
+    def __init__(self, data, **kwargs):
+        super().__init__(data, collate_fn=data.collate_fn, **kwargs)
+
+### Dataset for SA-DDI
+### Adapted from https://github.com/guaguabujianle/SA-DDI
+### SA-DDI runs a D-MPNN over bonds, so on top of the node graph that SSI-DDI uses it
+### also needs bond features and the line graph (which bond feeds which bond).
+### The atom features are the same 55-dim vectors as SSI-DDI so that the two models are
+### compared on identical inputs.
+
+SADDI_BOND_FEATS = 6
+
+class SADDIData(Data):
+    '''The line graph indexes bonds, not atoms, so batching has to offset
+    line_graph_edge_index by the number of bonds instead of the number of nodes.'''
+    def __inc__(self, key, value, *args, **kwargs):
+        if key == 'line_graph_edge_index':
+            return self.edge_index.size(1) if self.edge_index.nelement() != 0 else 0
+        return super().__inc__(key, value, *args, **kwargs)
+
+
+def bond_features(bond):
+    bond_type = bond.GetBondType()
+    return [
+        bond_type == Chem.rdchem.BondType.SINGLE,
+        bond_type == Chem.rdchem.BondType.DOUBLE,
+        bond_type == Chem.rdchem.BondType.TRIPLE,
+        bond_type == Chem.rdchem.BondType.AROMATIC,
+        bond.GetIsConjugated(),
+        bond.IsInRing(),
+    ]
+
+
+def empty_saddi_data(n_atom_feats):
+    ''' Placeholder for drugs without a usable molecule: one featureless atom carrying a
+    self loop, so the drug still occupies a slot in every bond-level pooling. '''
+    return SADDIData(x=torch.zeros((1, n_atom_feats)),
+                     edge_index=torch.zeros((2, 1), dtype=torch.long),
+                     line_graph_edge_index=torch.zeros((2, 0), dtype=torch.long),
+                     edge_attr=torch.zeros((1, SADDI_BOND_FEATS)))
+
+
+def get_mol_line_graph_data(mol_graph):
+    features = [(atom.GetIdx(), atom_features(atom)) for atom in mol_graph.GetAtoms()]
+    features.sort() # to make sure that the feature matrix is aligned according to the idx of the atom
+    _, features = zip(*features)
+    features = torch.stack(features)
+
+    bonds = list(mol_graph.GetBonds())
+    if len(bonds):
+        edge_list = torch.LongTensor([(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in bonds])
+        edge_feats = torch.FloatTensor([bond_features(b) for b in bonds])
+        ### make it undirected: each bond becomes two directed bonds sharing its features
+        edge_list = torch.cat([edge_list, edge_list[:, [1, 0]]], dim=0)
+        edge_feats = torch.cat([edge_feats] * 2, dim=0)
+    else:
+        ### every pooling in the model runs over bonds, so a bond-less molecule would
+        ### silently drop out of the batch and misalign it; give it a self loop instead
+        edge_list = torch.zeros((1, 2), dtype=torch.long)
+        edge_feats = torch.zeros((1, SADDI_BOND_FEATS))
+
+    ### the line graph: bond (i, j) feeds bond (j, k) for every k other than i
+    conn = (edge_list[:, 1].unsqueeze(1) == edge_list[:, 0].unsqueeze(0)) & \
+           (edge_list[:, 0].unsqueeze(1) != edge_list[:, 1].unsqueeze(0))
+    line_graph_edge_index = conn.nonzero(as_tuple=False).T
+
+    return SADDIData(x=features, edge_index=edge_list.T,
+                     line_graph_edge_index=line_graph_edge_index, edge_attr=edge_feats)
+
+
+class SADDIDataset(Dataset):
+    def __init__(self, tri_list, MOL_SADDI_DATA, args, ratio=1.0, shuffle=True):
+        self.MOL_SADDI_DATA = MOL_SADDI_DATA
+        self.tri_list = [(h, t, r) for h, t, r, *_ in tri_list]
+
+        if shuffle:
+            random.shuffle(self.tri_list)
+        limit = math.ceil(len(self.tri_list) * ratio)
+        self.tri_list = self.tri_list[:limit]
+
+    def __len__(self):
+        return len(self.tri_list)
+
+    def __getitem__(self, index):
+        return self.tri_list[index]
+
+    def collate_fn(self, batch):
+        pos_rels = []
+        pos_h_samples = []
+        pos_t_samples = []
+
+        for h, t, r in batch:
+            pos_rels.append(r)
+            pos_h_samples.append(self.MOL_SADDI_DATA[h])
+            pos_t_samples.append(self.MOL_SADDI_DATA[t])
+
+        ### follow_batch on edge_index gives the model `edge_index_batch`, the graph each
+        ### bond belongs to, which the substructure attention pools over
+        pos_h_samples = Batch.from_data_list(pos_h_samples, follow_batch=['edge_index'])
+        pos_t_samples = Batch.from_data_list(pos_t_samples, follow_batch=['edge_index'])
+        pos_rels = torch.LongTensor(pos_rels)
+
+        return (pos_h_samples, pos_t_samples, pos_rels)
+
+
+class SADDILoader(DataLoader):
     def __init__(self, data, **kwargs):
         super().__init__(data, collate_fn=data.collate_fn, **kwargs)

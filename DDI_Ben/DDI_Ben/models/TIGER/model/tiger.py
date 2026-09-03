@@ -8,6 +8,8 @@ from torch_geometric.nn import GCNConv, GATConv, global_max_pool as gmp, global_
 from torch_geometric.utils import dropout_adj
 from torch.nn import BCEWithLogitsLoss, Linear
 import math
+
+from dataset_registry import is_multiclass
 from torch.nn import Linear, Sequential, ReLU, BatchNorm1d as BN
 from torch_geometric.utils import degree
 from .GraphTransformer import GraphTransformer
@@ -89,9 +91,9 @@ class TIGER(torch.nn.Module):
 
         self.reserved_loss = 0
 
-        if self.args.dataset == 'drugbank':
+        if is_multiclass(self.args):
             self.bceloss	= torch.nn.BCELoss()
-        elif self.args.dataset == 'twosides':
+        else:
             self.bceloss	= torch.nn.BCELoss(weight = torch.tensor(self.args.loss_weight).to(self.device))
         
         self.cdan_dim = output_dim * 2
@@ -111,7 +113,7 @@ class TIGER(torch.nn.Module):
         self.b_xent.to(device)
     
     def loss(self, pred, label):
-        if self.args.dataset == 'drugbank':
+        if is_multiclass(self.args):
             return self.bceloss(torch.softmax(pred,1), label) + self.reserved_loss
         else:
             return self.bceloss(torch.sigmoid(pred)*label[:,:-1], label[:,:-1]*label[:,-1].unsqueeze(1)) + self.reserved_loss

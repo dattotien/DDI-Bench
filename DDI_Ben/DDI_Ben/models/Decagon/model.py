@@ -9,6 +9,8 @@ import torch.nn.functional as F
 from .GCNConv import GCNConv
 import torch_geometric
 
+from dataset_registry import is_multiclass, is_multilabel
+
 class Decagon(nn.Module):
 
     def __init__(self, edge_index, relation_num, dim, init_emb, args):
@@ -39,15 +41,15 @@ class Decagon(nn.Module):
 
         self.crossloss = torch.nn.CrossEntropyLoss()
         # self.crossloss = torch.nn.BCELoss()
-        if self.args.dataset == 'twosides':
+        if is_multilabel(self.args):
             self.bceloss = torch.nn.BCELoss(weight = torch.tensor(args.loss_weight))
         
         self.cdan_dim = self.dim * 2
 
     def loss(self, pred, true_label):
-        if self.args.dataset == 'drugbank':
+        if is_multiclass(self.args):
             return self.crossloss(pred, true_label)
-        elif self.args.dataset == 'twosides':
+        else:
             return self.bceloss(torch.sigmoid(pred)*true_label[:,:-1], true_label[:,:-1]*true_label[:,-1].unsqueeze(1))
 
     def forward(self, data):

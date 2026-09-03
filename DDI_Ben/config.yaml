@@ -125,6 +125,139 @@ models:
       kge_loss: "BCE_mean"
       use_feat: 1
 
+  # MecDDI versions
+  # Decagon / TIGER need data/initial/mecddi/relations_2hop.txt, which MecDDI does
+  # not ship (network_file is null in dataset_registry.py) -- they will raise until
+  # that file is added.
+  MLP_MecDDI:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "MLP_MecDDI"
+    args:
+      dataset: "mecddi"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      mlp_dropout: 0.1
+      mlp_dim: 200
+      use_feat: 1
+
+  Decagon_MecDDI:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "Decagon_MecDDI"
+    args:
+      dataset: "mecddi"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      decagon_dim: 200
+      decagon_drop: 0.1
+      use_feat: 1
+
+  TIGER_MecDDI:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "TIGER_MecDDI"
+    args:
+      dataset: "mecddi"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  SSI-DDI_MecDDI:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "SSI-DDI_MecDDI"
+    args:
+      dataset: "mecddi"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  SA-DDI_MecDDI:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "SA-DDI_MecDDI"
+    args:
+      dataset: "mecddi"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  
+
+  MRCGNN_MecDDI:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "MRCGNN_MecDDI"
+    args:
+      dataset: "mecddi"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  KGE_MecDDI:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "KGE_MecDDI"
+    args:
+      dataset: "mecddi"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      kge_dim: 200
+      kge_gamma: 1
+      kge_dropout: 0
+      kge_loss: "BCE_mean"
+      use_feat: 1
+
   # TWOSIDES versions
   MLP_TWOSIDES:
     enabled: false # ← Change to true to run
@@ -185,6 +318,23 @@ models:
     enabled: false # ← Change to true to run
     type: "ddi_ben"
     wandb_name: "SSI-DDI_TWOSIDES"
+    args:
+      dataset: "twosides"
+      dataset_type: "cluster"
+      lr: 0.0003
+      weight_decay: 0.00001
+      epoch: 100
+      batch_size: 128
+      gpu: 0
+      seed: 124
+      eval_skip: 1
+      patience: 10
+      use_feat: 1
+
+  SA-DDI_TWOSIDES:
+    enabled: false # ← Change to true to run
+    type: "ddi_ben"
+    wandb_name: "SA-DDI_TWOSIDES"
     args:
       dataset: "twosides"
       dataset_type: "cluster"
