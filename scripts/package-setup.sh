@@ -4,9 +4,22 @@ set -e
 ROOT_DIR="$(pwd)"
 export WANDB_MODE=offline
 
+pip install setuptools wheel --quiet
 pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121 --quiet
-pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.3.1+cu121.html --quiet
-pip install lmdb easydict setuptools --quiet
+
+# data.pyg.org (prebuilt wheel index for torch-scatter/torch-sparse/etc.) is
+# currently unreachable - its CNAME target has no A/AAAA record from any public
+# DNS resolver, not just from this container. DDI_Ben itself only needs
+# torch_scatter.scatter_add, and torchdrug (installed below) additionally
+# hard-imports torch_cluster at package-init time; torch-sparse and
+# torch-spline-conv are unused by both, so build just these two from their
+# PyPI sdists instead of fetching prebuilt wheels.
+GPU_CC="$(python -c 'import torch; print("%d.%d" % torch.cuda.get_device_capability(0))' 2>/dev/null || true)"
+if [ -n "$GPU_CC" ]; then
+  export TORCH_CUDA_ARCH_LIST="$GPU_CC"
+fi
+pip install torch-scatter torch-cluster --no-build-isolation --quiet
+pip install lmdb easydict --quiet
 pip install -r DDI_Ben/requirements.txt --quiet
 
 pip install rdkit hyperopt --quiet

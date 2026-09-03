@@ -1,0 +1,88 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Testing / Coverage
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# =========================
+# Build
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# ML / Experiment outputs
+# =========================
+checkpoints/
+runs/
+outputs/
+wandb/
+logs/
+
+# Model files
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+
+# =========================
+# Data
+# =========================
+data/
+datasets/
+*.csv
+*.tsv
+*.parquet
+*.jsonl
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
