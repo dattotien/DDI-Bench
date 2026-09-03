@@ -158,3 +158,6 @@ cython_debug/
 *.xlsx
 sample_data/
 *.bak
+ddigpt_venv/
+torch_drug/
+Mudiv2_EmerGNN
