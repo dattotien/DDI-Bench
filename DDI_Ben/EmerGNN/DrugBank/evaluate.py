@@ -24,7 +24,18 @@ def load_config(path):
     return SimpleNamespace(**config)
 
 if __name__ == '__main__':
-    args = load_config("config/config.yaml")
+    cli = argparse.ArgumentParser()
+    cli.add_argument('--config', default='config/config.yaml',
+                      help='path to config yaml (use a job-specific file when running parallel sessions '
+                           'so concurrent processes never read/write the same config)')
+    cli.add_argument('--wandb-entity', default=None, help='wandb entity; defaults to your account default')
+    cli.add_argument('--wandb-project', default='EmerGNN_DrugBank')
+    cli.add_argument('--wandb-name', default=None,
+                      help='base run name; the dataset is appended to it. '
+                           'If unset, defaults to "<dataset>_seed<seed>_gpu<gpu>"')
+    cli_args = cli.parse_args()
+
+    args = load_config(cli_args.config)
     torch.cuda.set_device(args.gpu)
     dataloader = DataLoader(args)
     eval_ent, eval_rel = dataloader.eval_ent, dataloader.eval_rel
@@ -61,8 +72,7 @@ if __name__ == '__main__':
         train1_neg = None
         args.dataset = tmp
 
-    if not os.path.exists('results'):
-        os.makedirs('results')
+    os.makedirs('results', exist_ok=True)  # exist_ok avoids a TOCTOU race when parallel sessions start at once
 
     def run_model(seed):
         random.seed(seed)
@@ -96,7 +106,19 @@ if __name__ == '__main__':
             args.n_dim = 32
             args.feat = 'E'
         
-        wandb.init(project='EmerGNN_DrugBank', config=vars(args))
+        # --wandb-name is a fixed base name (e.g. "MultiTask_DB_aw_w/o_description_based");
+        # the dataset is always appended so parallel sessions across datasets
+        # stay distinguishable on the dashboard. Left unset, fall back to the
+        # old auto-generated name.
+        run_name = f'{cli_args.wandb_name}_{args.dataset}' if cli_args.wandb_name \
+            else f'{args.dataset}_seed{seed}_gpu{args.gpu}'
+
+        wandb.init(
+            entity=cli_args.wandb_entity,
+            project=cli_args.wandb_project,
+            name=run_name,
+            config=vars(args),
+        )
         model = BaseModel(eval_ent, eval_rel, args, label_mapping=label_mapping)
         best_acc = -1
         best_str = ''
