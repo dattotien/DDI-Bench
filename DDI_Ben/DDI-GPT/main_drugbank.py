@@ -311,19 +311,36 @@ def evaluate(test_dataloader,model,args,logger,prefix=None,epoch=None,is_test=Fa
 def main():
     ### The yaml holds the defaults; these flags override it so a dataset can be
     ### run without editing (and committing) a tracked config file.
-    cli = argparse.ArgumentParser()
+    cli = argparse.ArgumentParser(
+        description='DDI-GPT on drugbank / mecddi / mudi. Flags override configs/*.yaml.')
     cli.add_argument('--config', default='configs/main_drugbank.yaml')
     cli.add_argument('--dataset', default=None, help='drugbank | mecddi | mudi')
     cli.add_argument('--split-strategy', dest='split_strategy', default=None,
                      choices=['cluster', 'random'])
     cli.add_argument('--annotation', default=None, help='tag for checkpoint / tensorboard paths')
+    ### how much work per run - the knobs worth changing per dataset
+    cli.add_argument('--num-train-epochs', dest='num_train_epochs', type=int, default=None)
+    cli.add_argument('--eval-skip', dest='eval_skip', type=int, default=None,
+                     help='validate every N epochs (the last epoch always validates)')
+    cli.add_argument('--max-eval-pairs', dest='max_eval_pairs', type=int, default=None,
+                     help='cap rows/pairs per validation set; 0 = all')
+    cli.add_argument('--max-test-pairs', dest='max_test_pairs', type=int, default=None,
+                     help='cap rows/pairs in the final test pass; 0 = all')
+    cli.add_argument('--max-train-steps', dest='max_train_steps', type=int, default=None,
+                     help='cap batches per epoch; 0 = the whole split')
+    cli.add_argument('--batch-size', dest='per_gpu_train_batch_size', type=int, default=None)
+    cli.add_argument('--eval-batch-size', dest='eval_batch_size', type=int, default=None)
+    cli.add_argument('--lr', type=float, default=None)
+    cli.add_argument('--patience', type=int, default=None)
     cli_args = cli.parse_args()
 
     args = Args(cli_args.config)
-    for key in ('dataset', 'split_strategy', 'annotation'):
-        value = getattr(cli_args, key)
-        if value is not None:
-            setattr(args, key, value)
+    ### every flag that was actually passed overrides the yaml; the yaml stays the
+    ### place for defaults so a per-dataset run needs no edit to a tracked file
+    overrides = {k: v for k, v in vars(cli_args).items() if k != 'config' and v is not None}
+    for key, value in overrides.items():
+        setattr(args, key, value)
+        args.args_dict[key] = value ### so to_str()/wandb config show what actually ran
 
     start_date = date.today().strftime('%m-%d')
 
@@ -362,6 +379,14 @@ def main():
             os.path.normpath(resolve_split_dir(args))))
         logger.info('drug names/descriptions: {}'.format(
             os.path.normpath(resolve_drug_info_path(args))))
+        logger.info('epochs={} eval_skip={} max_train_steps={} max_eval_pairs={} '
+                    'max_test_pairs={} batch={} lr={}'.format(
+                        args.num_train_epochs, getattr(args, 'eval_skip', 1),
+                        getattr(args, 'max_train_steps', 0), getattr(args, 'max_eval_pairs', 0),
+                        getattr(args, 'max_test_pairs', 0), args.per_gpu_train_batch_size, args.lr))
+        if args.directed_eval:
+            logger.info('directed eval (paired forward/inverse), options={} -> reporting '
+                        'opt*/macro,micro only'.format(args.eval_options))
 
     logger.info("Process rank: {}, device: {}, distributed training: {}, world_size: {}".format(
         args.rank, device, distributed, args.world_size))

@@ -31,6 +31,15 @@ fi
 DATASET="${DATASET:-}"
 SPLIT_STRATEGY="${SPLIT_STRATEGY:-}"
 GPUS="${GPUS:-1}"
+### Anything left empty falls back to configs/main_drugbank.yaml
+EPOCHS="${EPOCHS:-}"
+EVAL_SKIP="${EVAL_SKIP:-}"
+MAX_EVAL_PAIRS="${MAX_EVAL_PAIRS:-}"
+MAX_TEST_PAIRS="${MAX_TEST_PAIRS:-}"
+MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-}"
+BATCH_SIZE="${BATCH_SIZE:-}"
+LR="${LR:-}"
+ANNOTATION="${ANNOTATION:-}"
 
 ### Check the data before anything expensive: BioGPT is a ~1.5GB download, and a
 ### missing drug_DDI_GPT.json or an out-of-range label would only surface after it
@@ -39,13 +48,20 @@ python scripts/ddi_gpt_check_data.py ${DATASET:+$DATASET}
 cd "$ROOT_DIR/DDI_Ben/DDI-GPT"
 
 ARGS=()
-[ -n "$DATASET" ] && ARGS+=(--dataset "$DATASET")
-[ -n "$SPLIT_STRATEGY" ] && ARGS+=(--split-strategy "$SPLIT_STRATEGY")
+[ -n "$DATASET" ]         && ARGS+=(--dataset "$DATASET")
+[ -n "$SPLIT_STRATEGY" ]  && ARGS+=(--split-strategy "$SPLIT_STRATEGY")
+[ -n "$EPOCHS" ]          && ARGS+=(--num-train-epochs "$EPOCHS")
+[ -n "$EVAL_SKIP" ]       && ARGS+=(--eval-skip "$EVAL_SKIP")
+[ -n "$MAX_EVAL_PAIRS" ]  && ARGS+=(--max-eval-pairs "$MAX_EVAL_PAIRS")
+[ -n "$MAX_TEST_PAIRS" ]  && ARGS+=(--max-test-pairs "$MAX_TEST_PAIRS")
+[ -n "$MAX_TRAIN_STEPS" ] && ARGS+=(--max-train-steps "$MAX_TRAIN_STEPS")
+[ -n "$BATCH_SIZE" ]      && ARGS+=(--batch-size "$BATCH_SIZE")
+[ -n "$LR" ]              && ARGS+=(--lr "$LR")
+[ -n "$ANNOTATION" ]      && ARGS+=(--annotation "$ANNOTATION")
 
 echo
-echo "config: configs/main_drugbank.yaml  ${ARGS[*]}"
-grep -E '^(dataset|split_strategy|pretrained_model_path|gpuid|num_train_epochs|per_gpu_train_batch_size|drug_name_only|max_length):' \
-  configs/main_drugbank.yaml
+echo "yaml defaults: configs/main_drugbank.yaml"
+echo "overrides:     ${ARGS[*]:-(none)}"
 
 ### GPUS>1 launches under torchrun, which is what turns on the DDP path in
 ### main_drugbank.py (it keys off WORLD_SIZE). GPUS=1 keeps the plain single-GPU
