@@ -18,7 +18,6 @@ N_EPOCH="${N_EPOCH:-100}"
 EPOCH_PER_TEST="${EPOCH_PER_TEST:-5}"
 
 JOBS=(
-  "S0_finger_55:1234"
   "S1_finger_55:1234"
   "S2_finger_55:1234"
 )

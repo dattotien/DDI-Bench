@@ -107,4 +107,4 @@ EVAL_ARGS=(--config "$CONFIG_PATH")
 [ -n "$WANDB_PROJECT" ] && EVAL_ARGS+=(--wandb-project "$WANDB_PROJECT")
 [ -n "$WANDB_NAME" ] && EVAL_ARGS+=(--wandb-name "$WANDB_NAME")
 
-python -W ignore evaluate.py "${EVAL_ARGS[@]}"
+python3 -W ignore evaluate.py "${EVAL_ARGS[@]}"
