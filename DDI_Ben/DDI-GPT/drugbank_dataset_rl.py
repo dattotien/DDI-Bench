@@ -17,6 +17,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ### files duplicated; resolve_split_dir() reports which one it used.
 DATA_ROOTS = [os.path.join(HERE, 'data'), os.path.join(HERE, '..', 'DDI_Ben', 'data')]
 
+### the dataset is rebuilt every epoch, so the empty-description notice is emitted once
+_WARNED_EMPTY_DESC = set()
+
 
 def resolve_split_dir(args):
     """Directory holding <state>.txt for the configured dataset / split strategy."""
@@ -80,6 +83,17 @@ class drugbank_dataset_rl(Dataset):
                     len(missing), os.path.basename(split_path), os.path.basename(info_path),
                     missing[:10]))
 
+        ### Report the description fallback once per dataset, and only when
+        ### descriptions are actually used - otherwise it is noise repeated every epoch.
+        if not getattr(args, 'drug_name_only', True) and args.dataset not in _WARNED_EMPTY_DESC:
+            blank = sorted(i for i in {d for row in self.data for d in row[:2]}
+                           if not str(self._entry_field(i, 'description')).strip())
+            if blank:
+                _WARNED_EMPTY_DESC.add(args.dataset)
+                print("[{}] {} drug(s) have an empty description (e.g. {}); their prompt falls "
+                      "back to the drug name, since a blank summary would leave that half of "
+                      "the input fully masked.".format(args.dataset, len(blank), blank[:8]))
+
         if adv is not None:
             self.data = ((int(adv/len(self.data)) + 1)*self.data)[:adv]
 
@@ -94,6 +108,12 @@ class drugbank_dataset_rl(Dataset):
     def __len__(self):
         return len(self.data)
 
+    def _entry_field(self, drug_id, key):
+        entry = self.ddi_dict[str(drug_id)]
+        if isinstance(entry, dict):
+            return entry.get(key, entry.get('summary', '') if key == 'description' else '')
+        return (list(entry) + [''])[0 if key == 'name' else 1]
+
     def _name_and_summary(self, drug_id):
         entry = self.ddi_dict[str(drug_id)]
         if isinstance(entry, dict):
@@ -101,7 +121,13 @@ class drugbank_dataset_rl(Dataset):
             summary = entry.get('description', entry.get('summary', ''))
         else: ### legacy [name, description] pairs
             name, summary = (list(entry) + [''])[:2]
-        return str(name or ''), str(summary or '')
+        name, summary = str(name or ''), str(summary or '')
+        ### An empty description is not harmless in the description-based path: the
+        ### prompt is built by unmasking only the summary tokens, so a blank one
+        ### leaves that half of the input entirely masked out (and a pair where both
+        ### are blank leaves nothing attended at all). Falling back to the drug name
+        ### keeps the row informative instead of training on padding.
+        return name, (summary or name)
 
     def __getitem__(self, index):
         drug1_id,drug2_id,rel_id = self.data[index]
