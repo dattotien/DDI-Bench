@@ -7,18 +7,31 @@
 set -e
 
 ROOT_DIR="$(pwd)"
-MUDI_DIR="$ROOT_DIR/Mudiv2_EmerGNN"
+### DATA_DIR lets the smoke test point at generated fixtures instead of the real data
+MUDI_DIR="${DATA_DIR:-$ROOT_DIR/Mudiv2_EmerGNN}"
 
 # Pick up secrets (WANDB_API_KEY) / WANDB_MODE from .env at the repo root,
 # if present, so they don't need to be exported by hand each session. .env
 # is gitignored - see .env.example for the template. Non-secret run
 # metadata (dataset, seed, gpu, wandb entity/project/name) is passed at
 # invocation time instead - see the env vars below.
+### Values already in the environment win over .env: `WANDB_MODE=offline bash
+### scripts/emergnn-run.sh` has to stay offline even though .env says online, so
+### this fills in only what is unset instead of sourcing the file (which would
+### overwrite everything passed at invocation time).
 if [ -f "$ROOT_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$ROOT_DIR/.env"
-  set +a
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#export }"
+    case "$line" in ''|'#'*) continue ;; esac
+    case "$line" in *=*) ;; *) continue ;; esac
+    key="${line%%=*}"
+    val="${line#*=}"
+    val="${val%\"}"; val="${val#\"}"
+    val="${val%\'}"; val="${val#\'}"
+    if [ -z "${!key:-}" ]; then
+      export "$key=$val"
+    fi
+  done < "$ROOT_DIR/.env"
 fi
 
 DATASET="${DATASET:-S1_finger_55}"

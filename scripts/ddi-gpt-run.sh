@@ -23,4 +23,14 @@ echo "config: configs/main_drugbank.yaml"
 grep -E '^(dataset|split_strategy|pretrained_model_path|gpuid|gpu_num|multi_gpu|num_train_epochs|per_gpu_train_batch_size):' \
   configs/main_drugbank.yaml
 
-python main_drugbank.py
+### GPUS>1 launches under torchrun, which is what turns on the DDP path in
+### main_drugbank.py (it keys off WORLD_SIZE). GPUS=1 keeps the plain single-GPU
+### run on the device named by `gpuid` in the yaml.
+GPUS="${GPUS:-1}"
+
+if [ "$GPUS" -gt 1 ]; then
+  echo "launching DDP on $GPUS GPUs -- effective train batch = per_gpu_train_batch_size x $GPUS"
+  torchrun --standalone --nproc_per_node="$GPUS" main_drugbank.py
+else
+  python main_drugbank.py
+fi

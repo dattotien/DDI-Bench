@@ -10,19 +10,56 @@ import logging
 from torch.utils.tensorboard import SummaryWriter  
 from torch import nn
 from transformers import BioGptModel, BioGptForSequenceClassification
-from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, DistributedSampler
 import numpy as np
 from sklearn import metrics
 import setproctitle
 import json
 from torch.optim import Adam
 import math
+import datetime as _datetime
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
 
 setproctitle.setproctitle("ddigpt_drugbank_shenzhenqian")
 
-def format_time(elapsed):    
-    elapsed_rounded = int(round((elapsed)))    
-    return str(datetime.timedelta(seconds=elapsed_rounded))   
+def format_time(elapsed):
+    elapsed_rounded = int(round((elapsed)))
+    return str(datetime.timedelta(seconds=elapsed_rounded))
+
+def setup_distributed(args):
+    """Enable DDP when launched under torchrun, otherwise stay single-GPU.
+
+    `torchrun --nproc_per_node=N` sets WORLD_SIZE/RANK/LOCAL_RANK; plain
+    `python main_drugbank.py` does not, and then this keeps the old behaviour of
+    training on the single device named by config `gpuid`.
+
+    The timeout is generous on purpose: validation and test run on rank 0 only
+    (see the `local_rank in [-1, 0]` guards), so the other ranks sit in a
+    barrier for however long the three eval settings take, and the NCCL default
+    would abort them.
+    """
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    if world_size < 2:
+        args.local_rank = -1
+        args.rank = 0
+        args.world_size = 1
+        args.device = "cuda:" + str(args.gpuid) if torch.cuda.is_available() else "cpu"
+        return False
+
+    if not torch.cuda.is_available():
+        raise RuntimeError('WORLD_SIZE={} but CUDA is unavailable'.format(world_size))
+
+    args.local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    args.rank = int(os.environ.get('RANK', 0))
+    args.world_size = world_size
+    torch.cuda.set_device(args.local_rank)
+    args.device = "cuda:{}".format(args.local_rank)
+    dist.init_process_group(backend='nccl', timeout=_datetime.timedelta(hours=2))
+    return True
+
+def is_main_process(args):
+    return args.local_rank in [-1, 0]
 
 class Args():
     def __init__(self, yaml_path):
@@ -168,18 +205,19 @@ def main():
     args = Args(config_file)
 
     start_date = date.today().strftime('%m-%d')
+
+    distributed = setup_distributed(args)
+    device = args.device
+
+    ### one log file per rank: every rank opens this with filemode 'w', so a
+    ### shared name would have them truncating each other's log
+    rank_suffix = '' if not distributed else '-rank{}'.format(args.rank)
     if args.eval:
-        log_path = './log/{}/{}-eval.log'.format("drugbank_" + start_date,time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()))
+        log_path = './log/{}/{}-eval{}.log'.format("drugbank_" + start_date,time.strftime("%Y-%m-%d_%H-%M-%S",time.localtime()), rank_suffix)
     else: ### usually not eval
-        log_path = './log/{}/{}.log'.format("drugbank_" + start_date,time.strftime("%Y-%m-%d %H:%M:%S",time.localtime()))
-    if not os.path.exists(os.path.dirname(log_path)):
-        os.makedirs(os.path.dirname(log_path))
-    torch.cuda.empty_cache() 
-
-    args.local_rank = -1
-    device = "cuda:"+ args.gpuid if torch.cuda.is_available() else "cpu"
-
-    args.device = device
+        log_path = './log/{}/{}{}.log'.format("drugbank_" + start_date,time.strftime("%Y-%m-%d_%H-%M-%S",time.localtime()), rank_suffix)
+    os.makedirs(os.path.dirname(log_path), exist_ok=True) ### exist_ok: ranks race here
+    torch.cuda.empty_cache()
 
     logging.basicConfig(format='%(asctime)s-%(levelname)s-%(name)s | %(message)s',
         datefmt='%Y/%m/%d %H:%M:%S',
@@ -187,16 +225,22 @@ def main():
         filename=log_path,
         filemode=args.filemode)
     logger = logging.getLogger()
-    logger.info("Process rank: {}, device: {}, distributed training: {}".format(args.local_rank,device, bool(args.local_rank != -1)))
+    logger.info("Process rank: {}, device: {}, distributed training: {}, world_size: {}".format(
+        args.rank, device, distributed, args.world_size))
     logger.info("Training/evaluation parameters %s", args.to_str())
+    if distributed and is_main_process(args):
+        logger.info("effective train batch size = {} (per_gpu_train_batch_size {} x world_size {})".format(
+            args.per_gpu_train_batch_size * args.world_size, args.per_gpu_train_batch_size, args.world_size))
 
-    tensorboard_path = './tensorboard/{}/{}'.format(start_date,args.annotation)
-    if not os.path.exists(os.path.dirname(tensorboard_path)):
-        os.makedirs(os.path.dirname(tensorboard_path))
-    writer = SummaryWriter(tensorboard_path)
+    ### only rank 0 writes tensorboard: two writers in one dir interleave steps
+    writer = None
+    if is_main_process(args):
+        tensorboard_path = './tensorboard/{}/{}'.format(start_date,args.annotation)
+        os.makedirs(os.path.dirname(tensorboard_path), exist_ok=True)
+        writer = SummaryWriter(tensorboard_path)
 
-    # model = biogpt_cls(args) 
-    model = easy_bioclass(args) 
+    # model = biogpt_cls(args)
+    model = easy_bioclass(args)
 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
@@ -207,6 +251,20 @@ def main():
     optimizer = torch.optim.Adam(optimizer_grouped_parameters,eps = args.epsilon,betas=(0.9,0.98),lr=args.lr)
 
     model.to(args.device)
+
+    ### `core_model` stays the plain module: checkpointing and the rank-0-only
+    ### eval go through it, so state_dict keys keep their normal names (a DDP
+    ### wrapper would prefix everything with 'module.') and eval skips the
+    ### gradient-sync machinery it has no use for.
+    core_model = model
+    train_model = model
+    if distributed:
+        train_model = DistributedDataParallel(
+            model, device_ids=[args.local_rank], output_device=args.local_rank,
+            ### flip this in the config if DDP raises "Expected to have finished
+            ### reduction in the prior iteration": it means some parameter got no
+            ### gradient, which costs an extra graph traversal to detect
+            find_unused_parameters=bool(getattr(args, 'ddp_find_unused_parameters', False)))
 
     eval_set = ['S0', 'S1', 'S2']
 
@@ -223,18 +281,27 @@ def main():
 
     for epoch in range(int(args.num_train_epochs)):
 
+        ### early stopping is decided from rank 0's eval numbers only, so the
+        ### decision is broadcast below; every rank must leave the loop on the
+        ### same epoch or the ones still inside would block forever waiting for
+        ### a gradient all-reduce that never comes
         if False not in [fail_time[setting] >= patience for setting in eval_set]:
             break
         if args.local_rank in [-1,0]: ### local_rank = -1
             logger.info('local_rank={},epoch={}'.format(args.local_rank, epoch))
         train_dataset = drugbank_dataset_rl(args,'train')
-        train_sampler = RandomSampler(train_dataset) # if args.local_rank == -1 else DistributedSampler(train_dataset)
+        if distributed:
+            train_sampler = DistributedSampler(train_dataset, num_replicas=args.world_size,
+                                               rank=args.rank, shuffle=True)
+            train_sampler.set_epoch(epoch) ### without this every epoch sees the same shuffle
+        else:
+            train_sampler = RandomSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.per_gpu_train_batch_size,num_workers=0)
 
         train_dataloader_adv = None
 
         torch.cuda.empty_cache()
-        train_loss,global_step = train(args, train_dataloader,model,optimizer,writer,logger,global_step)
+        train_loss,global_step = train(args, train_dataloader,train_model,optimizer,writer,logger,global_step)
         if args.local_rank in [-1,0]:
             logger.info('epoch={},loss={}'.format(epoch, train_loss))
         torch.cuda.empty_cache()
@@ -247,34 +314,54 @@ def main():
                 dev_data = drugbank_dataset_rl(args,'valid_' + setting)
                 # dev_sampler = RandomSampler(dev_data) 
                 dev_dataloader = DataLoader(dev_data, shuffle=False, batch_size=args.eval_batch_size,num_workers=0)
-                dev_acc, dev_f1, dev_kappa = evaluate(dev_dataloader,model,args,logger)
+                dev_acc, dev_f1, dev_kappa = evaluate(dev_dataloader,core_model,args,logger)
                 writer.add_scalar('dev_acc', dev_acc, epoch)
                 logger.info("epoch={}, setting {}, dev_acc={}, dev_f1={}, dev_kappa={}".format(epoch, setting, dev_acc, dev_f1, dev_kappa))
                 if dev_acc >= best_performance[setting]: #epoch % 10 == 0: # :
                     checkpoints_dir = './checkpoints/{}/{}'.format(start_date,args.annotation)
-                    if not os.path.exists(checkpoints_dir):
-                        os.makedirs(checkpoints_dir)
+                    os.makedirs(checkpoints_dir, exist_ok=True)
                     checkpoint_path = os.path.join(checkpoints_dir,'checkpoint_epoch{}_{}.pt'.format(epoch, setting))
                     best_checkpoint_path[setting] = checkpoint_path
                     best_performance[setting] = dev_acc
-                    torch.save({'model':model.state_dict(),'optimizer':optimizer.state_dict(),'epoch':epoch},checkpoint_path)
+                    torch.save({'model':core_model.state_dict(),'optimizer':optimizer.state_dict(),'epoch':epoch},checkpoint_path)
                     logger.info('Save best checkpoint to {}'.format(checkpoint_path))
                     fail_time[setting] = 0
                 else:
                     fail_time[setting] += 1
+
+        if distributed:
+            ### fail_time only ever changes on rank 0 (eval is rank-0 only), so the
+            ### stop decision has to be handed to the others; otherwise rank 0 breaks
+            ### out while rank 1 waits forever for the next gradient all-reduce.
+            stop = torch.tensor(
+                [1 if False not in [fail_time[s] >= patience for s in eval_set] else 0],
+                device=args.device)
+            dist.broadcast(stop, src=0)
+            dist.barrier() ### keep the ranks in lockstep across rank-0's eval
+            if stop.item():
+                if is_main_process(args):
+                    logger.info('early stopping at epoch {}'.format(epoch))
+                break
+
     if args.test:
         if args.local_rank in [-1,0]:
             for setting in eval_set:
             # for setting in ['S2']:
                 logger.info("test best_checkpoint_path={}".format(best_checkpoint_path[setting]))
                 checkpoint = torch.load(best_checkpoint_path[setting])
-                model.load_state_dict(checkpoint['model'])
+                core_model.load_state_dict(checkpoint['model'])
                 dev_data = drugbank_dataset_rl(args,'test_' + setting)
                 # dev_sampler = RandomSampler(dev_data) 
                 dev_dataloader = DataLoader(dev_data, shuffle=False, batch_size=args.eval_batch_size,num_workers=0)
-                test_acc, test_f1, test_kappa = evaluate(dev_dataloader,model,args,logger)
+                test_acc, test_f1, test_kappa = evaluate(dev_dataloader,core_model,args,logger)
                 logger.info("setting {}, test_acc={}, test_f1={}, test_kappa={}. ".format(setting, test_acc, test_f1, test_kappa))
                 # logger.info("best epoch={},test_f1={}".format(checkpoint['epoch'], test_acc))
+
+    if distributed:
+        ### the other ranks wait here through rank 0's test phase (hence the long
+        ### timeout in setup_distributed) so NCCL is torn down from every rank
+        dist.barrier()
+        dist.destroy_process_group()
 
 if __name__=='__main__':
     main()
