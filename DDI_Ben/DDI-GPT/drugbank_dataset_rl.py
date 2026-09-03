@@ -5,18 +5,80 @@ import numpy as np
 import copy
 import torch
 import json
+import os
 import pickle
 import time
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+### DDI-GPT keeps drugbank/twosides splits under its own data/, while mecddi and
+### mudi splits live in DDI_Ben's. Both roots are searched so no dataset needs its
+### files duplicated; resolve_split_dir() reports which one it used.
+DATA_ROOTS = [os.path.join(HERE, 'data'), os.path.join(HERE, '..', 'DDI_Ben', 'data')]
+
+
+def resolve_split_dir(args):
+    """Directory holding <state>.txt for the configured dataset / split strategy."""
+    roots = [getattr(args, 'data_root', '')] if getattr(args, 'data_root', '') else []
+    roots += DATA_ROOTS
+    folder = '{}_{}'.format(args.dataset, args.split_strategy)
+    tried = []
+    for root in roots:
+        candidate = os.path.join(root, folder)
+        tried.append(candidate)
+        if os.path.isdir(candidate):
+            return candidate
+    raise FileNotFoundError(
+        "no split directory '{}' for dataset '{}'. Looked in:\n  {}".format(
+            folder, args.dataset, '\n  '.join(os.path.normpath(t) for t in tried)))
+
+
+def resolve_drug_info_path(args):
+    """Path of the {id: {name, description}} file, derived from the dataset.
+
+    Derived rather than configured on purpose: a hardcoded ddi_dict_path is how
+    you end up training on mecddi splits with drugbank's drug names and never
+    notice.
+    """
+    for root in ([getattr(args, 'data_root', '')] if getattr(args, 'data_root', '') else []) + DATA_ROOTS:
+        candidate = os.path.join(root, args.dataset, 'drug_DDI_GPT.json')
+        if os.path.exists(candidate):
+            return candidate
+    raise FileNotFoundError(
+        "dataset '{}' has no drug_DDI_GPT.json (drug names/descriptions). Build one with:\n"
+        "  python scripts/make_ddigpt_drug_info.py --dataset {} --info <drugbank-id-keyed>.json".format(
+            args.dataset, args.dataset))
+
+
 class drugbank_dataset_rl(Dataset):
+    """Serves any multiclass DDI dataset (drugbank / mecddi / mudi).
+
+    The name is kept for import compatibility; the dataset is chosen by
+    ``args.dataset``, not by this module.
+    """
+
     def __init__(self,args,state,adv=None):
-        with open(args.ddi_dict_path, 'r') as file:
+        info_path = resolve_drug_info_path(args)
+        with open(info_path, 'r', encoding='utf-8') as file:
             self.ddi_dict = json.load(file)
 
-        with open('./data/drugbank_{}/{}.txt'.format(args.split_strategy, state), 'r') as file:
-            self.data = [[int(num) for num in item.strip().split()] for item in file.readlines()]
+        split_path = os.path.join(resolve_split_dir(args), '{}.txt'.format(state))
+        if not os.path.exists(split_path):
+            raise FileNotFoundError("missing split '{}' for dataset '{}': {}".format(
+                state, args.dataset, split_path))
+        with open(split_path, 'r', encoding='utf-8') as file:
+            self.data = [[int(num) for num in item.strip().split()] for item in file.readlines() if item.strip()]
+
+        ### Fail here rather than with a KeyError deep inside an epoch: __getitem__
+        ### looks drugs up by id, so one uncovered id kills a run after minutes.
+        missing = sorted({d for row in self.data for d in row[:2] if str(d) not in self.ddi_dict})
+        if missing:
+            raise KeyError(
+                "{} drug id(s) in {} have no entry in {} (e.g. {}). Regenerate that file so it "
+                "covers every id used by the splits.".format(
+                    len(missing), os.path.basename(split_path), os.path.basename(info_path),
+                    missing[:10]))
 
         if adv is not None:
             self.data = ((int(adv/len(self.data)) + 1)*self.data)[:adv]
@@ -32,11 +94,23 @@ class drugbank_dataset_rl(Dataset):
     def __len__(self):
         return len(self.data)
 
+    def _name_and_summary(self, drug_id):
+        entry = self.ddi_dict[str(drug_id)]
+        if isinstance(entry, dict):
+            name = entry.get('name', '')
+            summary = entry.get('description', entry.get('summary', ''))
+        else: ### legacy [name, description] pairs
+            name, summary = (list(entry) + [''])[:2]
+        return str(name or ''), str(summary or '')
+
     def __getitem__(self, index):
         drug1_id,drug2_id,rel_id = self.data[index]
         # drug1_accession,drug2_accession = self.id2accession[drug1_id],self.id2accession[drug2_id]
-        drug1_name,drug1_summary = self.ddi_dict[str(drug1_id)].values()
-        drug2_name,drug2_summary = self.ddi_dict[str(drug2_id)].values()
+        ### Read by key, not by .values(): unpacking values() required exactly two
+        ### fields in insertion order, so an entry with only a name raised
+        ### ValueError and one written {description, name} silently swapped the two.
+        drug1_name, drug1_summary = self._name_and_summary(drug1_id)
+        drug2_name, drug2_summary = self._name_and_summary(drug2_id)
       
         prompt = "The drug-drug interactions between {} and {} is: ".format(drug1_name,drug2_name)
 

@@ -1,6 +1,7 @@
+import argparse
 import gc
 import torch
-from drugbank_dataset_rl import drugbank_dataset_rl
+from drugbank_dataset_rl import drugbank_dataset_rl, resolve_split_dir, resolve_drug_info_path
 import yaml
 from datetime import date
 import datetime
@@ -15,6 +16,7 @@ import numpy as np
 from sklearn import metrics
 import setproctitle
 import json
+import sys
 from torch.optim import Adam
 import math
 import datetime as _datetime
@@ -23,9 +25,74 @@ from torch.nn.parallel import DistributedDataParallel
 
 setproctitle.setproctitle("ddigpt_drugbank_shenzhenqian")
 
+### DDI_Ben owns dataset_registry.py (relation counts, label mappings) and
+### metric.py (the paired forward/inverse scoring MUDI is reported with). They are
+### imported instead of copied so DDI-GPT's numbers are produced by the same code
+### as the other baselines'. Appended, not inserted, so DDI_Ben's module names can
+### never shadow an installed package.
+DDI_BEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'DDI_Ben')
+if DDI_BEN_DIR not in sys.path:
+    sys.path.append(DDI_BEN_DIR)
+
 def format_time(elapsed):
     elapsed_rounded = int(round((elapsed)))
     return str(datetime.timedelta(seconds=elapsed_rounded))
+
+def resolve_dataset(args):
+    """Fill in the dataset-dependent settings from DDI_Ben's dataset_registry.
+
+    The registry is the single place that knows each dataset's relation count, so
+    it is imported rather than copied - it is pure stdlib, no torch, so pulling it
+    into DDI-GPT's environment is safe. Adding a dataset there makes it runnable
+    here with no further edits.
+    """
+    import dataset_registry
+
+    cfg = dataset_registry.get_config(args.dataset)
+    if cfg['task'] != dataset_registry.MULTICLASS:
+        raise ValueError(
+            "main_drugbank.py handles multiclass datasets; '{}' is {} - use main_twosides.py".format(
+                args.dataset, cfg['task']))
+    args.num_labels = cfg['num_rel']
+    args.label_mapping = cfg['label_mapping']
+    args.directed_eval = bool(cfg.get('directed_eval'))
+    args.eval_options = cfg.get('eval_options') or [1]
+    if args.directed_eval and not args.label_mapping:
+        raise ValueError(
+            "dataset '{}' sets directed_eval but has no label_mapping in "
+            "dataset_registry.py; metric.py needs it to name the classes".format(args.dataset))
+    return cfg
+
+
+def make_eval_loader(args, dataset, cap=0):
+    """Eval DataLoader, optionally capped to `cap` rows/pairs (0 = all).
+
+    Subsampling a directed_eval dataset cannot just take the first N rows: the
+    file is [forward half | inverse half], so a prefix would take forward
+    directions only and metric.py would pair unrelated rows. Rows i and i+N/2
+    are therefore always taken together, and the selection is a fixed stride
+    rather than a prefix so it spans the whole file and stays identical across
+    epochs (otherwise best-checkpoint selection would chase a moving target).
+    """
+    n = len(dataset)
+    cap = int(cap or 0)
+    if cap <= 0:
+        return DataLoader(dataset, shuffle=False, batch_size=args.eval_batch_size, num_workers=0)
+
+    if args.directed_eval:
+        half = n // 2
+        keep = max(1, min(cap, half))
+        stride = max(1, int(math.ceil(half / float(keep))))
+        chosen = list(range(0, half, stride))[:keep]
+        indices = chosen + [half + i for i in chosen]
+    else:
+        keep = max(1, min(cap, n))
+        stride = max(1, int(math.ceil(n / float(keep))))
+        indices = list(range(0, n, stride))[:keep]
+
+    subset = torch.utils.data.Subset(dataset, indices)
+    return DataLoader(subset, shuffle=False, batch_size=args.eval_batch_size, num_workers=0)
+
 
 def setup_distributed(args):
     """Enable DDP when launched under torchrun, otherwise stay single-GPU.
@@ -85,7 +152,7 @@ class biogpt_cls(nn.Module):
 
         self.config = self.llm.config
         self.activation = {}
-        self.linear = nn.Linear(1024, 86)
+        self.linear = nn.Linear(1024, args.num_labels)
         self.dropout = nn.Dropout(0.1)
         
     def forward(
@@ -112,7 +179,11 @@ class easy_bioclass(nn.Module):
     def __init__(self, args):
         super(easy_bioclass, self).__init__()
         self.args = args
-        self.llm = BioGptForSequenceClassification.from_pretrained(args.pretrained_model_path, num_labels=86, use_safetensors=True)
+        ### num_labels comes from the dataset, not a constant: 86 was drugbank's
+        ### relation count, and mecddi (103) would blow up with
+        ### "IndexError: Target 95 is out of bounds" once a high label was sampled
+        self.llm = BioGptForSequenceClassification.from_pretrained(
+            args.pretrained_model_path, num_labels=args.num_labels, use_safetensors=True)
     
     def forward(
         self,input_ids,attention_mask,labels
@@ -133,7 +204,15 @@ def train(args,train_dataloader,model,optimizer,writer,logger=None,global_step=0
     model.zero_grad()
     t0 = time.time()
 
+    ### max_train_steps caps the batches per epoch (0 = the whole split). Useful
+    ### on MUDI, whose train split is ~347k pairs. Being a fixed count, every DDP
+    ### rank stops on the same step, so the gradient all-reduce stays balanced.
+    max_steps = int(getattr(args, 'max_train_steps', 0) or 0)
+    total_steps = len(train_dataloader) if max_steps <= 0 else min(max_steps, len(train_dataloader))
+
     for step, batch_all in enumerate(data_loader):
+        if max_steps > 0 and step >= max_steps:
+            break
         model.train()
         batch = tuple(t.to(args.device) for t in batch_all)
         # output = model(*(tuple(batch)[0:3]))
@@ -147,7 +226,7 @@ def train(args,train_dataloader,model,optimizer,writer,logger=None,global_step=0
         loss.backward()
         loss = loss.item()
         avg_loss.append(loss)
-        if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
+        if step % args.gradient_accumulation_steps == 0 or step == total_steps - 1:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0*args.gradient_accumulation_steps)
             optimizer.step()
             model.zero_grad()
@@ -159,19 +238,29 @@ def train(args,train_dataloader,model,optimizer,writer,logger=None,global_step=0
         if (step+1) % args.log_step == 0 and args.local_rank in [-1,0]:
             elapsed = format_time(time.time() - t0)
             logger.info('Batch {:>5,} of {:>5,}.Loss: {:} Elapsed:{:}.'
-            .format(step+1, len(train_dataloader),format(loss, '.4f'),elapsed))
+            .format(step+1, total_steps,format(loss, '.4f'),elapsed))
 
     avg_loss = np.array(avg_loss).mean()
     return avg_loss,global_step
 
-def evaluate(test_dataloader,model,args,logger):
-    avg_acc = []
-    model.eval()   
+def evaluate(test_dataloader,model,args,logger,prefix=None,epoch=None,is_test=False):
+    """Returns (primary_metric, metrics_dict).
+
+    Datasets flagged ``directed_eval`` in dataset_registry (MUDI) are scored the
+    same way DDI_Ben scores them: metric.py pairs row i with row i + N/2, the two
+    directions of one drug pair, so those datasets report only the paired
+    option-1/2/3 numbers. Plain accuracy / kappa over the flattened rows would
+    count each direction as an independent sample and is not comparable to the
+    other baselines, so it is not reported for them at all.
+
+    The pairing is positional, which is why the eval loader must never shuffle
+    and never drop the last batch.
+    """
+    model.eval()
 
     y_pred = []
     y_true = []
-    cbr_num = 0
-    hit_num = 0
+    y_outputs = []
     with torch.no_grad():
         # for batch in tqdm(test_dataloader,total=len(test_dataloader)):
         for step, batch in enumerate(test_dataloader):
@@ -180,32 +269,65 @@ def evaluate(test_dataloader,model,args,logger):
             pos_input_ids,pos_attention_mask,labels = batch
 
             scores = model(pos_input_ids,pos_attention_mask,labels)[1]
-            
-            correct = torch.eq(torch.max(scores, dim=1)[1], labels.flatten()).float()         
-            acc = correct.sum().item() / len(correct)
 
             y_pred.extend(torch.max(scores, dim=1)[1].tolist())
             y_true.extend(labels.flatten().tolist())
-            avg_acc.append(acc)
+            if args.directed_eval:
+                ### option 3 softmaxes the raw scores of both directions
+                y_outputs.extend(scores.float().cpu().numpy())
 
-    if args.local_rank in [-1,0]:
-        acc = metrics.accuracy_score(y_true,y_pred)
-        f1 = metrics.f1_score(y_true, y_pred, average=None).mean() 
-        kappa = metrics.cohen_kappa_score(y_true, y_pred)
-        logger.info("acc = {:>5,}".format(acc,'.4f'))
-        logger.info("f1 = {}".format(f1))
-        logger.info("kappa = {}".format(kappa))
-        logger.info("len = {}".format(len(y_true)))
-        logger.info("len dataset= {}".format(len(test_dataloader.dataset)))
-    
-    return acc, f1, kappa
+    if args.directed_eval:
+        from metric import get_evaluation_metrics ### DDI_Ben's, see DDI_BEN_DIR above
+        if len(y_true) % 2:
+            raise ValueError(
+                "{} produced {} rows; a directed_eval dataset needs an even count so that row i "
+                "and row i+N/2 are the two directions of one pair. Check that the eval loader is "
+                "not shuffling or dropping a partial batch.".format(prefix or 'eval', len(y_true)))
+        detail = get_evaluation_metrics(
+            y_true, y_pred, np.asarray(y_outputs),
+            label_mapping=args.label_mapping, options=args.eval_options,
+            is_test=is_test, epoch=epoch, prefix=prefix)
+        out = {}
+        for option in args.eval_options:
+            for key in ('macro', 'micro', 'micro_precision', 'micro_recall', 'f1_no_interaction'):
+                out['opt{}_{}'.format(option, key)] = detail[option][key]
+        main_option = args.eval_options[0]
+        primary = detail[main_option]['macro']
+        if is_main_process(args):
+            logger.info('{}: {} pairs | {}'.format(
+                prefix or 'eval', len(y_true) // 2,
+                ', '.join('opt{} macro-F1 {:.4f} micro-F1 {:.4f}'.format(
+                    o, detail[o]['macro'], detail[o]['micro']) for o in args.eval_options)))
+        return primary, out
+
+    acc = metrics.accuracy_score(y_true,y_pred)
+    f1 = metrics.f1_score(y_true, y_pred, average=None).mean()
+    kappa = metrics.cohen_kappa_score(y_true, y_pred)
+    if is_main_process(args):
+        logger.info('{}: {} rows | accuracy {:.4f} macro-F1 {:.4f} kappa {:.4f}'.format(
+            prefix or 'eval', len(y_true), acc, f1, kappa))
+    return acc, {'accuracy': acc, 'macro_f1': f1, 'kappa': kappa}
 
 def main():
-    config_file = 'configs/main_drugbank.yaml'# parser.parse_args().config_file
-    args = Args(config_file)
+    ### The yaml holds the defaults; these flags override it so a dataset can be
+    ### run without editing (and committing) a tracked config file.
+    cli = argparse.ArgumentParser()
+    cli.add_argument('--config', default='configs/main_drugbank.yaml')
+    cli.add_argument('--dataset', default=None, help='drugbank | mecddi | mudi')
+    cli.add_argument('--split-strategy', dest='split_strategy', default=None,
+                     choices=['cluster', 'random'])
+    cli.add_argument('--annotation', default=None, help='tag for checkpoint / tensorboard paths')
+    cli_args = cli.parse_args()
+
+    args = Args(cli_args.config)
+    for key in ('dataset', 'split_strategy', 'annotation'):
+        value = getattr(cli_args, key)
+        if value is not None:
+            setattr(args, key, value)
 
     start_date = date.today().strftime('%m-%d')
 
+    resolve_dataset(args)
     distributed = setup_distributed(args)
     device = args.device
 
@@ -213,9 +335,9 @@ def main():
     ### shared name would have them truncating each other's log
     rank_suffix = '' if not distributed else '-rank{}'.format(args.rank)
     if args.eval:
-        log_path = './log/{}/{}-eval{}.log'.format("drugbank_" + start_date,time.strftime("%Y-%m-%d_%H-%M-%S",time.localtime()), rank_suffix)
+        log_path = './log/{}/{}-eval{}.log'.format(args.dataset + "_" + start_date,time.strftime("%Y-%m-%d_%H-%M-%S",time.localtime()), rank_suffix)
     else: ### usually not eval
-        log_path = './log/{}/{}{}.log'.format("drugbank_" + start_date,time.strftime("%Y-%m-%d_%H-%M-%S",time.localtime()), rank_suffix)
+        log_path = './log/{}/{}{}.log'.format(args.dataset + "_" + start_date,time.strftime("%Y-%m-%d_%H-%M-%S",time.localtime()), rank_suffix)
     os.makedirs(os.path.dirname(log_path), exist_ok=True) ### exist_ok: ranks race here
     torch.cuda.empty_cache()
 
@@ -225,6 +347,22 @@ def main():
         filename=log_path,
         filemode=args.filemode)
     logger = logging.getLogger()
+
+    ### basicConfig(filename=...) sends every record to the file and nothing to
+    ### the terminal, which makes a long run look dead and gives no way to tell
+    ### training from eval. Mirror the log to stdout on the main process.
+    if is_main_process(args):
+        console = logging.StreamHandler(sys.stdout)
+        console.setLevel(logging.INFO)
+        console.setFormatter(logging.Formatter('%(asctime)s | %(message)s', datefmt='%H:%M:%S'))
+        logger.addHandler(console)
+        logger.info('log file: {}'.format(os.path.abspath(log_path)))
+        logger.info('dataset: {} ({} split) | num_labels: {} | splits: {}'.format(
+            args.dataset, args.split_strategy, args.num_labels,
+            os.path.normpath(resolve_split_dir(args))))
+        logger.info('drug names/descriptions: {}'.format(
+            os.path.normpath(resolve_drug_info_path(args))))
+
     logger.info("Process rank: {}, device: {}, distributed training: {}, world_size: {}".format(
         args.rank, device, distributed, args.world_size))
     logger.info("Training/evaluation parameters %s", args.to_str())
@@ -235,12 +373,17 @@ def main():
     ### only rank 0 writes tensorboard: two writers in one dir interleave steps
     writer = None
     if is_main_process(args):
-        tensorboard_path = './tensorboard/{}/{}'.format(start_date,args.annotation)
+        tensorboard_path = './tensorboard/{}/{}/{}'.format(args.dataset, start_date, args.annotation)
         os.makedirs(os.path.dirname(tensorboard_path), exist_ok=True)
         writer = SummaryWriter(tensorboard_path)
 
     # model = biogpt_cls(args)
+    ### first run downloads the weights from HuggingFace (~1.5GB), which is silent
+    ### and easily mistaken for a hang
+    logger.info('loading pretrained model: {}'.format(args.pretrained_model_path))
     model = easy_bioclass(args)
+    logger.info('model loaded ({:.1f}M parameters)'.format(
+        sum(p.numel() for p in model.parameters()) / 1e6))
 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
@@ -290,6 +433,10 @@ def main():
         if args.local_rank in [-1,0]: ### local_rank = -1
             logger.info('local_rank={},epoch={}'.format(args.local_rank, epoch))
         train_dataset = drugbank_dataset_rl(args,'train')
+        if is_main_process(args):
+            logger.info('epoch {}: {} train pairs, batch {} -> {} steps'.format(
+                epoch, len(train_dataset), args.per_gpu_train_batch_size,
+                math.ceil(len(train_dataset) / args.per_gpu_train_batch_size / max(1, args.world_size))))
         if distributed:
             train_sampler = DistributedSampler(train_dataset, num_replicas=args.world_size,
                                                rank=args.rank, shuffle=True)
@@ -307,18 +454,29 @@ def main():
         torch.cuda.empty_cache()
         gc.collect()
 
-        ### valid and test part for benchmark
-        if args.local_rank in [-1,0]:
+        ### valid and test part for benchmark. eval_skip controls how often this
+        ### runs: MUDI's three valid sets are ~114k rows each, so evaluating every
+        ### epoch spends most of the GPU budget on eval rather than training.
+        ### The last epoch always evaluates, so a run never ends unevaluated.
+        eval_skip = max(1, int(getattr(args, 'eval_skip', 1) or 1))
+        is_last_epoch = (epoch == int(args.num_train_epochs) - 1)
+        run_eval = ((epoch + 1) % eval_skip == 0) or is_last_epoch
+
+        if args.local_rank in [-1,0] and run_eval:
             for setting in eval_set:
             # for setting in ['S2']:
                 dev_data = drugbank_dataset_rl(args,'valid_' + setting)
-                # dev_sampler = RandomSampler(dev_data) 
-                dev_dataloader = DataLoader(dev_data, shuffle=False, batch_size=args.eval_batch_size,num_workers=0)
-                dev_acc, dev_f1, dev_kappa = evaluate(dev_dataloader,core_model,args,logger)
-                writer.add_scalar('dev_acc', dev_acc, epoch)
-                logger.info("epoch={}, setting {}, dev_acc={}, dev_f1={}, dev_kappa={}".format(epoch, setting, dev_acc, dev_f1, dev_kappa))
+                # dev_sampler = RandomSampler(dev_data)
+                dev_dataloader = make_eval_loader(args, dev_data, getattr(args, 'max_eval_pairs', 0))
+                logger.info('epoch {}: evaluating valid_{} ({} of {} rows)'.format(
+                    epoch, setting, len(dev_dataloader.dataset), len(dev_data)))
+                dev_acc, dev_metrics = evaluate(
+                    dev_dataloader, core_model, args, logger,
+                    prefix='valid_' + setting, epoch=epoch, is_test=False)
+                for name, value in dev_metrics.items():
+                    writer.add_scalar('valid_{}/{}'.format(setting, name), value, epoch)
                 if dev_acc >= best_performance[setting]: #epoch % 10 == 0: # :
-                    checkpoints_dir = './checkpoints/{}/{}'.format(start_date,args.annotation)
+                    checkpoints_dir = './checkpoints/{}/{}/{}'.format(args.dataset, start_date, args.annotation)
                     os.makedirs(checkpoints_dir, exist_ok=True)
                     checkpoint_path = os.path.join(checkpoints_dir,'checkpoint_epoch{}_{}.pt'.format(epoch, setting))
                     best_checkpoint_path[setting] = checkpoint_path
@@ -347,15 +505,25 @@ def main():
         if args.local_rank in [-1,0]:
             for setting in eval_set:
             # for setting in ['S2']:
+                if setting not in best_checkpoint_path:
+                    logger.info('setting {}: no checkpoint was saved, skipping test'.format(setting))
+                    continue
                 logger.info("test best_checkpoint_path={}".format(best_checkpoint_path[setting]))
                 checkpoint = torch.load(best_checkpoint_path[setting])
                 core_model.load_state_dict(checkpoint['model'])
                 dev_data = drugbank_dataset_rl(args,'test_' + setting)
-                # dev_sampler = RandomSampler(dev_data) 
-                dev_dataloader = DataLoader(dev_data, shuffle=False, batch_size=args.eval_batch_size,num_workers=0)
-                test_acc, test_f1, test_kappa = evaluate(dev_dataloader,core_model,args,logger)
-                logger.info("setting {}, test_acc={}, test_f1={}, test_kappa={}. ".format(setting, test_acc, test_f1, test_kappa))
-                # logger.info("best epoch={},test_f1={}".format(checkpoint['epoch'], test_acc))
+                # dev_sampler = RandomSampler(dev_data)
+                ### max_test_pairs defaults to 0 so the reported test numbers cover
+                ### the whole file; cap it only for smoke runs
+                dev_dataloader = make_eval_loader(args, dev_data, getattr(args, 'max_test_pairs', 0))
+                logger.info('testing test_{} ({} of {} rows)'.format(
+                    setting, len(dev_dataloader.dataset), len(dev_data)))
+                test_primary, test_metrics = evaluate(
+                    dev_dataloader, core_model, args, logger,
+                    prefix='test_' + setting, epoch=checkpoint['epoch'], is_test=True)
+                logger.info('TEST {} (best epoch {}): {}'.format(
+                    setting, checkpoint['epoch'],
+                    ', '.join('{}={:.4f}'.format(k, v) for k, v in test_metrics.items())))
 
     if distributed:
         ### the other ranks wait here through rank 0's test phase (hence the long

@@ -1,7 +1,9 @@
 import copy
 import numpy as np
 import wandb
-from utils import _softmax, _precision, _recall, _f1_score
+### metric_utils, not utils: utils pulls in the model stack (torchdrug,
+### torch_scatter) and fcntl, which scoring does not need and DDI-GPT does not have
+from metric_utils import _softmax, _precision, _recall, _f1_score
 
 
 def _calculate_exact_match_3(

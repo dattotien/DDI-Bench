@@ -38,25 +38,9 @@ RDLogger.DisableLog('rdApp.*')
 warnings.filterwarnings('ignore', category=DeprecationWarning, module='rdkit')
 
 
-def _softmax(x):
-    """Numerically stable softmax over a 1-D score vector."""
-    x = np.array(x, dtype=np.float64)
-    e_x = np.exp(x - np.max(x))
-    return e_x / e_x.sum()
-
-
-def _precision(TP, FP):
-    return TP / (TP + FP) if (TP + FP) > 0 else 0.0
-
-
-def _recall(TP, FN):
-    return TP / (TP + FN) if (TP + FN) > 0 else 0.0
-
-
-def _f1_score(TP, FP, FN):
-    p = _precision(TP, FP)
-    r = _recall(TP, FN)
-    return 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+### these live in metric_utils so metric.py can be imported without this module's
+### heavy model imports; re-exported here for callers that already expect them
+from metric_utils import _softmax, _precision, _recall, _f1_score
 
 
 def load_data(args):
